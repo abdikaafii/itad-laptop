@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """
-laptop_check.py - ITAD pre-wipe check (v3.1.1)  MULTI-PLATFORM
+laptop_check.py - ITAD pre-wipe check (v3.1.2)  MULTI-PLATFORM
 READ ONLY. Never wipes or writes to any internal drive.
 
+v3.1.2: updated default JSON path to match itad_run.py pipeline.
 v3.1.1: bug fixes over v3.1.0 (no change to check logic):
   - --json - no longer pollutes stdout (human output goes to stderr)
   - registry hives are streamed, not capped at 8 MB
@@ -21,7 +22,7 @@ try:
 except Exception:
     NOW = datetime.now()
 
-VERSION = "3.1.1"
+VERSION = "3.1.2"
 
 BAD_SERIALS = {
     "", "none", "default string", "to be filled by o.e.m.",
@@ -809,10 +810,12 @@ def check_linux_absolute(root):
 
 
 def _default_json_path():
+    # Updated to use the persistent home directory
+    default = os.path.expanduser("~/itad-reports/laptop_check.json")
     for c in ("/run/live/medium", "/cdrom", "/media/usb", "/mnt/usb"):
         if os.path.isdir(c) and os.access(c, os.W_OK):
             return os.path.join(c, "laptop_check.json")
-    return "/tmp/laptop_check.json"
+    return default
 
 
 # =============================================================================
@@ -1212,4 +1215,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-    
