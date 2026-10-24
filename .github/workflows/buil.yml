@@ -24,14 +24,6 @@ jobs:
         run: |
           sudo sed -i '/# begin-remove-after: released:forky/,/# end-remove-after/d' /usr/lib/live/build/lb_chroot_dpkg
 
-      # --- THE FIX FOR THE ISOLINUX BUG ---
-      - name: Fix isolinux paths
-        run: |
-          sudo mkdir -p /root/isolinux
-          sudo cp /usr/lib/ISOLINUX/isolinux.bin /root/isolinux/ || true
-          sudo cp /usr/lib/syslinux/modules/bios/vesamenu.c32 /root/isolinux/ || true
-          sudo cp /usr/lib/syslinux/modules/bios/ldlinux.c32 /root/isolinux/ || true
-
       - name: Configure Live Build
         run: |
           cd build
@@ -46,6 +38,43 @@ jobs:
             --syslinux-theme "live-build" \
             --bootloader "syslinux" \
             --bootappend-live "boot=live components quiet splash"
+
+      - name: DIAGNOSTIC - locate isolinux files
+        run: |
+          echo "=== syslinux package files ==="
+          dpkg -L syslinux 2>/dev/null | grep -E "(isolinux|ldlinux|vesamenu)" || true
+          echo "=== syslinux-common package files ==="
+          dpkg -L syslinux-common 2>/dev/null | grep -E "(isolinux|ldlinux|vesamenu)" || true
+          echo "=== isolinux package files ==="
+          dpkg -L isolinux 2>/dev/null | grep -E "(isolinux|ldlinux|vesamenu)" || true
+          echo "=== find on disk ==="
+          sudo find /usr -name "isolinux.bin" 2>/dev/null || echo "isolinux.bin NOT FOUND anywhere under /usr"
+          sudo find /usr -name "vesamenu.c32" 2>/dev/null || echo "vesamenu.c32 NOT FOUND anywhere under /usr"
+          sudo find /usr -name "ldlinux.c32" 2>/dev/null || echo "ldlinux.c32 NOT FOUND anywhere under /usr"
+
+      - name: Fix isolinux paths (AFTER lb config)
+        run: |
+          set -e
+          sudo mkdir -p /root/isolinux
+
+          ISOLINUX=$(sudo find /usr -name "isolinux.bin" 2>/dev/null | head -1)
+          VESAMENU=$(sudo find /usr -name "vesamenu.c32" 2>/dev/null | head -1)
+          LDLINUX=$(sudo find /usr -name "ldlinux.c32" 2>/dev/null | head -1)
+
+          echo "Found isolinux.bin at:  ${ISOLINUX:-<none>}"
+          echo "Found vesamenu.c32 at:  ${VESAMENU:-<none>}"
+          echo "Found ldlinux.c32 at:  ${LDLINUX:-<none>}"
+
+          [ -n "$ISOLINUX" ] || { echo "FATAL: isolinux.bin not found on this runner"; exit 1; }
+          [ -n "$VESAMENU" ] || { echo "FATAL: vesamenu.c32 not found on this runner"; exit 1; }
+          [ -n "$LDLINUX" ] || { echo "FATAL: ldlinux.c32 not found on this runner"; exit 1; }
+
+          sudo cp "$ISOLINUX" /root/isolinux/isolinux.bin
+          sudo cp "$VESAMENU" /root/isolinux/vesamenu.c32
+          sudo cp "$LDLINUX" /root/isolinux/ldlinux.c32
+
+          echo "=== Contents of /root/isolinux/ ==="
+          sudo ls -la /root/isolinux/
 
       - name: Build ISO
         run: |
