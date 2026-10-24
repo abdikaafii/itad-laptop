@@ -18,7 +18,7 @@ jobs:
           sudo apt-get install -y \
             live-build xorriso isolinux syslinux syslinux-common \
             syslinux-utils squashfs-tools dosfstools mtools \
-            grub-efi-amd64-bin grub-pc-bin
+            grub-efi-amd64-bin grub-pc-bin file
 
       - name: Patch live-build for start-stop-daemon bug
         run: |
@@ -39,41 +39,47 @@ jobs:
             --bootloader "syslinux" \
             --bootappend-live "boot=live components quiet splash"
 
-      - name: DIAGNOSTIC - locate isolinux files
-        run: |
-          echo "=== syslinux package files ==="
-          dpkg -L syslinux 2>/dev/null | grep -E "(isolinux|ldlinux|vesamenu)" || true
-          echo "=== syslinux-common package files ==="
-          dpkg -L syslinux-common 2>/dev/null | grep -E "(isolinux|ldlinux|vesamenu)" || true
-          echo "=== isolinux package files ==="
-          dpkg -L isolinux 2>/dev/null | grep -E "(isolinux|ldlinux|vesamenu)" || true
-          echo "=== find on disk ==="
-          sudo find /usr -name "isolinux.bin" 2>/dev/null || echo "isolinux.bin NOT FOUND anywhere under /usr"
-          sudo find /usr -name "vesamenu.c32" 2>/dev/null || echo "vesamenu.c32 NOT FOUND anywhere under /usr"
-          sudo find /usr -name "ldlinux.c32" 2>/dev/null || echo "ldlinux.c32 NOT FOUND anywhere under /usr"
-
-      - name: Fix isolinux paths (AFTER lb config)
+      - name: Fix isolinux paths with real files
         run: |
           set -e
           sudo mkdir -p /root/isolinux
 
-          ISOLINUX=$(sudo find /usr -name "isolinux.bin" 2>/dev/null | head -1)
-          VESAMENU=$(sudo find /usr -name "vesamenu.c32" 2>/dev/null | head -1)
-          LDLINUX=$(sudo find /usr -name "ldlinux.c32" 2>/dev/null | head -1)
+          ISO=$(sudo find /usr -type f -name "isolinux.bin" 2>/dev/null | head -1)
+          VES=$(sudo find /usr -type f -name "vesamenu.c32" 2>/dev/null | head -1)
+          LDL=$(sudo find /usr -type f -name "ldlinux.c32"  2>/dev/null | head -1)
 
-          echo "Found isolinux.bin at:  ${ISOLINUX:-<none>}"
-          echo "Found vesamenu.c32 at:  ${VESAMENU:-<none>}"
-          echo "Found ldlinux.c32 at:  ${LDLINUX:-<none>}"
+          echo "Direct-file search:"
+          echo "  isolinux.bin = ${ISO:-<not found>}"
+          echo "  vesamenu.c32 = ${VES:-<not found>}"
+          echo "  ldlinux.c32  = ${LDL:-<not found>}"
 
-          [ -n "$ISOLINUX" ] || { echo "FATAL: isolinux.bin not found on this runner"; exit 1; }
-          [ -n "$VESAMENU" ] || { echo "FATAL: vesamenu.c32 not found on this runner"; exit 1; }
-          [ -n "$LDLINUX" ] || { echo "FATAL: ldlinux.c32 not found on this runner"; exit 1; }
+          if [ -z "$ISO" ] || [ -z "$VES" ] || [ -z "$LDL" ]; then
+            echo "Some files missing — extracting from .deb packages..."
+            mkdir -p /tmp/iso-work && cd /tmp/iso-work
+            apt-get download isolinux syslinux-common
+            mkdir -p extracted
+            for d in isolinux_*.deb syslinux-common_*.deb; do
+              echo "  extracting $d"
+              dpkg-deb -x "$d" extracted
+            done
+            [ -n "$ISO" ] || ISO=$(find extracted -type f -name "isolinux.bin"  | head -1)
+            [ -n "$VES" ] || VES=$(find extracted -type f -name "vesamenu.c32"  | head -1)
+            [ -n "$LDL" ] || LDL=$(find extracted -type f -name "ldlinux.c32"  | head -1)
+            echo "After .deb extraction:"
+            echo "  isolinux.bin = ${ISO:-<still missing>}"
+            echo "  vesamenu.c32 = ${VES:-<still missing>}"
+            echo "  ldlinux.c32  = ${LDL:-<still missing>}"
+          fi
 
-          sudo cp "$ISOLINUX" /root/isolinux/isolinux.bin
-          sudo cp "$VESAMENU" /root/isolinux/vesamenu.c32
-          sudo cp "$LDLINUX" /root/isolinux/ldlinux.c32
+          [ -n "$ISO" ] || { echo "FATAL: no real isolinux.bin found"; exit 1; }
+          [ -n "$VES" ] || { echo "FATAL: no real vesamenu.c32 found"; exit 1; }
+          [ -n "$LDL" ] || { echo "FATAL: no real ldlinux.c32 found"; exit 1; }
 
-          echo "=== Contents of /root/isolinux/ ==="
+          sudo cp "$ISO" /root/isolinux/isolinux.bin
+          sudo cp "$VES" /root/isolinux/vesamenu.c32
+          sudo cp "$LDL" /root/isolinux/ldlinux.c32
+
+          echo "=== /root/isolinux/ contents ==="
           sudo ls -la /root/isolinux/
 
       - name: Build ISO
