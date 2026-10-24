@@ -1,0 +1,14 @@
+util-linux
+smartmontools
+nvme-cli
+hdparm
+pciutils
+usbutils
+stress-ng
+memtester
+v4l-utils
+ffmpeg
+alsa-utils
+evtest
+iw
+jq
