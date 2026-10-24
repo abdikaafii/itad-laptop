@@ -17,13 +17,20 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y \
             live-build xorriso isolinux syslinux syslinux-common \
-            syslinux-utils syslinux-efi \
-            squashfs-tools dosfstools mtools \
+            syslinux-utils squashfs-tools dosfstools mtools \
             grub-efi-amd64-bin grub-pc-bin
 
       - name: Patch live-build for start-stop-daemon bug
         run: |
           sudo sed -i '/# begin-remove-after: released:forky/,/# end-remove-after/d' /usr/lib/live/build/lb_chroot_dpkg
+
+      # --- THE FIX FOR THE ISOLINUX BUG ---
+      - name: Fix isolinux paths
+        run: |
+          sudo mkdir -p /root/isolinux
+          sudo cp /usr/lib/ISOLINUX/isolinux.bin /root/isolinux/ || true
+          sudo cp /usr/lib/syslinux/modules/bios/vesamenu.c32 /root/isolinux/ || true
+          sudo cp /usr/lib/syslinux/modules/bios/ldlinux.c32 /root/isolinux/ || true
 
       - name: Configure Live Build
         run: |
