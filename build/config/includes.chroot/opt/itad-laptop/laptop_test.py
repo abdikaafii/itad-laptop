@@ -1,13 +1,17 @@
 #!/usr/bin/env python3
 """
-laptop_test.py - ITAD component test (v1.1.0)  READ-MOSTLY
+laptop_test.py - ITAD component test (v1.1.1)  READ-MOSTLY
 
 Step 2 of the ITAD pipeline. Runs AFTER laptop_check.py and the wipe.
 
-v1.1.0: new coloured terminal interface (progress bars, live keyboard map,
-result banner). The tests themselves are unchanged from v1.0.0, apart from
-the keyboard test, which no longer hangs if no key is pressed and no longer
-prints the typed keys on screen. Use --no-color for plain text.
+v1.1.1: bug fixes over v1.1.0 (no change to test logic):
+  - --json - no longer pollutes stdout (human output goes to stderr)
+  - tempfile.mktemp() replaced with mkstemp (avoids races / symlink attacks)
+  - capture temp file is removed even on failure
+  - file handles closed with `with`
+  - 'clear' uses ANSI rather than shelling out
+  - SMART error note is stored as a plain string, not str-or-list
+  - battery: WARN when a battery is present but health is unreadable
 
 Tests:
   cpu       - identity, temperature, 30s load test, thermal throttling
@@ -53,7 +57,7 @@ try:
 except Exception:
     NOW = datetime.now()
 
-VERSION = "1.1.0"
+VERSION = "1.1.1"
 ALL_TESTS = ["cpu", "ram", "drive", "battery", "screen", "keyboard",
              "touchpad", "webcam", "speakers", "wifi", "usb"]
 
@@ -64,11 +68,11 @@ ALL_TESTS = ["cpu", "ram", "drive", "battery", "screen", "keyboard",
 # =============================================================================
 ANSI_RE = re.compile(r"\033\[[0-9;?]*[A-Za-z]")
 _TERM = os.environ.get("TERM", "")
-LIVE = sys.stdout.isatty() and _TERM != "dumb"        # can redraw lines
-USE_COLOR = LIVE and not os.environ.get("NO_COLOR")   # can use colours
+LIVE = sys.stdout.isatty() and _TERM != "dumb"
+USE_COLOR = LIVE and not os.environ.get("NO_COLOR")
 _ENC = (getattr(sys.stdout, "encoding", None) or "").lower()
 UNICODE = "utf" in _ENC
-FANCY = UNICODE and _TERM != "linux"   # fancy icons only where fonts have them
+FANCY = UNICODE and _TERM != "linux"
 
 try:
     W = max(60, min(shutil.get_terminal_size((80, 24)).columns, 78))
@@ -115,7 +119,6 @@ def pad(s, n):
 
 
 def _trunc(s, n):
-    """Cut a (possibly coloured) string to n visible characters."""
     if vlen(s) <= n:
         return s
     out, count = [], 0
@@ -165,7 +168,6 @@ _STATE = {
 
 
 def tag(state, label=None):
-    """Coloured status tag with icon, e.g.  ✔ PASS  /  ✖ BLOCKED."""
     key = str(state).split(" (")[0].strip().upper()
     icon, color = _STATE.get(key, ("info", "cyan"))
     text = "%s %s" % (ICON[icon], label if label is not None else state)
@@ -181,7 +183,6 @@ def rule(title, color="cyan"):
 
 
 def box(title, rows, color="cyan"):
-    """Boxed section. rows = list of strings; None draws a divider line."""
     t = (" %s " % title) if title else ""
     fill = max(0, W - 3 - len(t))
     print(paint(BX["tl"] + BX["h"], color) + paint(t, "bold", color)
@@ -197,7 +198,6 @@ def box(title, rows, color="cyan"):
 
 
 def kv(label, value, style=(), lw=11):
-    """'Label   value' rows (wraps long values)."""
     text = str(value).strip() or "-"
     lines = _wrap(text, INNER - lw - 2) or ["-"]
     rows = []
@@ -208,7 +208,6 @@ def kv(label, value, style=(), lw=11):
 
 
 def item(prefix, text, style=(), indent=0):
-    """Bullet row: coloured prefix + wrapped text."""
     plen = vlen(prefix)
     lines = _wrap(text, INNER - plen - 1 - indent) or [""]
     rows = []
@@ -242,7 +241,6 @@ _BANNER_STYLE = {
 
 
 def big_banner(lines, color):
-    """Full-width result block: green / yellow / red."""
     print()
     if USE_COLOR:
         st = _BANNER_STYLE[color]
@@ -260,7 +258,6 @@ def big_banner(lines, color):
 
 
 def spaced(text):
-    """'CLEAR' -> 'C L E A R' for a bold banner look."""
     return " ".join(text)
 
 
@@ -315,9 +312,9 @@ def scan_internal_disks():
 
 
 # =============================================================================
-# screen helpers (new interface)
+# screen helpers
 # =============================================================================
-_POS = [0, 0]      # [current test number, total tests]
+_POS = [0, 0]
 
 
 def _banner(name):
@@ -373,8 +370,7 @@ def clear_progress():
 
 
 def run_with_bar(cmd, expected_s, label, timeout, extra=None):
-    """Like run(), but shows a live progress bar while the command works.
-    Output goes to temp files so a chatty tool can never block."""
+    """Like run(), but shows a live progress bar. Output to temp files."""
     env = os.environ.copy()
     env["LC_ALL"] = "C"
     env["LANG"] = "C"
@@ -629,7 +625,9 @@ def test_drives():
                 except Exception as e:
                     info["smart_error"] = str(e)[:80]
             else:
-                info["smart_error"] = (err or out).strip().splitlines()[:2]
+                # Normalise to a single-line string.
+                info["smart_error"] = " ".join(
+                    (err or out).strip().splitlines()[:2])
 
         if info.get("healthy") is False:
             r["notes"].append("%s: SMART health FAILED" % path)
@@ -666,9 +664,7 @@ def test_drives():
             if info.get(k) is not None:
                 bits.append("%s=%s" % (k, info[k]))
         if info.get("smart_error") and info.get("healthy") is None:
-            bits.append("smartctl: %s" % (
-                info["smart_error"] if isinstance(info["smart_error"], str)
-                else " ".join(info["smart_error"])))
+            bits.append("smartctl: %s" % info["smart_error"])
         if bits:
             say("    " + "  |  ".join(bits)[:W - 8], ("dim",))
         r["details"]["disks"].append(info)
@@ -693,6 +689,7 @@ def test_battery():
         return r
 
     out = []
+    health_seen = False
     for bp in bats:
         b = {"path": bp}
         for k in ("status", "capacity", "cycle_count", "manufacturer",
@@ -708,6 +705,7 @@ def test_battery():
             b["design_mwh"] = di / 1000
             b["full_mwh"] = fi / 1000
             b["health_pct"] = health
+            health_seen = True
             if health < 60:
                 r["notes"].append(
                     "%s: battery health %s%% (below 60%%)" % (bp, health))
@@ -728,6 +726,12 @@ def test_battery():
             say("%s: health data unavailable" % bp, ("yellow",))
         out.append(b)
     r["details"]["batteries"] = out
+
+    # Battery present but no health data at all: don't call it PASS.
+    if not health_seen and r["status"] == "PASS":
+        r["status"] = "WARN"
+        r["notes"].append("Battery present but health data unreadable")
+
     _done(r)
     return r
 
@@ -774,16 +778,17 @@ def test_screen(interactive):
             failed = True
             r["notes"].append("Failure on pattern %s" % name)
         seen.append(name)
-    os.system("clear")
+    sys.stdout.write("\033[2J\033[H")
+    sys.stdout.flush()
     r["details"]["patterns_shown"] = seen
     r["status"] = "FAIL" if failed else ("PASS" if seen else "SKIP")
-    _banner("screen")
+    _banner("screen")   # re-draw header after the full-screen test
     _done(r, "%d colour(s) shown" % len(seen))
     return r
 
 
 # =============================================================================
-# Keyboard (interactive, evtest) -- with live on-screen keyboard
+# Keyboard (interactive, evtest)
 # =============================================================================
 def _kb_rows():
     def letters(s):
@@ -829,7 +834,6 @@ def _kb_draw(seen, first):
 
 
 def _tty_quiet():
-    """Stop typed keys being echoed on screen. Returns a restore function."""
     try:
         import termios
         fd = sys.stdin.fileno()
@@ -865,7 +869,6 @@ def test_keyboard(interactive):
         if rc == 0:
             current_dev = None
             for ln in out.splitlines():
-                # real format:  /dev/input/event3:<TAB>AT Translated Set 2 keyboard
                 m_new = re.match(r"\s*(/dev/input/event\d+):\s*(.*)$", ln)
                 if m_new and m_new.group(2).strip():
                     if _is_kb(m_new.group(2)):
@@ -873,7 +876,6 @@ def test_keyboard(interactive):
                         r["details"]["device"] = m_new.group(2).strip()
                         break
                     continue
-                # older format:  <name>:  then  /dev/input/eventN on its own line
                 m = re.match(r"(.+):\s*$", ln)
                 if m and "/dev/input" not in ln:
                     current_dev = m.group(1).strip()
@@ -886,9 +888,10 @@ def test_keyboard(interactive):
         pass
 
     if not kb_dev:
-        # fallback: look for a normal keyboard in /proc/bus/input/devices
         try:
-            for block in open("/proc/bus/input/devices").read().split("\n\n"):
+            with open("/proc/bus/input/devices") as f:
+                content = f.read()
+            for block in content.split("\n\n"):
                 if "EV=120013" in block:
                     m = re.search(r"Handlers=.*?(event\d+)", block)
                     if m:
@@ -1001,7 +1004,9 @@ def test_touchpad():
     r = {"component": "Touchpad", "status": "SKIP",
          "details": {}, "notes": []}
     try:
-        for block in open("/proc/bus/input/devices").read().split("\n\n"):
+        with open("/proc/bus/input/devices") as f:
+            content = f.read()
+        for block in content.split("\n\n"):
             low = block.lower()
             if any(k in low for k in ("touchpad", "synaptics", "elan",
                                        "trackpad", "alps")):
@@ -1060,18 +1065,25 @@ def test_webcam():
             re.findall(r"(\d{3,4}x\d{3,4})", out2)))
 
     if shutil.which("ffmpeg"):
-        tmp = tempfile.mktemp(suffix=".jpg")
-        rc, _, _ = run(["ffmpeg", "-y", "-f", "v4l2", "-i", dev,
-                        "-frames:v", "1", tmp], timeout=15)
-        if rc == 0 and os.path.exists(tmp) and os.path.getsize(tmp) > 0:
-            r["details"]["capture_bytes"] = os.path.getsize(tmp)
-            os.remove(tmp)
-            r["status"] = "PASS"
-            line("Capture", "1 frame grabbed (%d bytes)"
-                 % r["details"]["capture_bytes"])
-        else:
-            r["status"] = "WARN"
-            r["notes"].append("ffmpeg capture failed")
+        # mkstemp: avoids the deprecated/unsafe mktemp.
+        fd, tmp = tempfile.mkstemp(suffix=".jpg", prefix="itad_cam_")
+        os.close(fd)
+        try:
+            rc, _, _ = run(["ffmpeg", "-y", "-f", "v4l2", "-i", dev,
+                            "-frames:v", "1", tmp], timeout=15)
+            if rc == 0 and os.path.exists(tmp) and os.path.getsize(tmp) > 0:
+                r["details"]["capture_bytes"] = os.path.getsize(tmp)
+                r["status"] = "PASS"
+                line("Capture", "1 frame grabbed (%d bytes)"
+                     % r["details"]["capture_bytes"])
+            else:
+                r["status"] = "WARN"
+                r["notes"].append("ffmpeg capture failed")
+        finally:
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
     else:
         r["status"] = "PASS"
         r["notes"].append("Device present, ffmpeg not installed for capture")
@@ -1152,6 +1164,8 @@ def test_wifi():
     line("Interface", iface)
 
     if shutil.which("iw"):
+        # NB: this briefly sets the interface up — that is the only write
+        # this tool performs, and only on Wi-Fi.
         run(["ip", "link", "set", iface, "up"], timeout=5)
         time.sleep(1)
         rc, out, _ = run(["iw", "dev", iface, "scan"], timeout=20)
@@ -1307,6 +1321,11 @@ def main():
                 break
         args.json = default
 
+    # --json - : keep stdout clean for the JSON payload; human output on stderr.
+    json_stream = sys.stdout
+    if args.json == "-":
+        sys.stdout = sys.stderr
+
     interactive = not args.no_interactive
     selected = [t.strip().lower() for t in args.test.split(",") if t.strip()]
     unknown = [t for t in selected if t not in ALL_TESTS]
@@ -1337,24 +1356,22 @@ def main():
         "wifi":     test_wifi,
         "usb":      lambda: test_usb(interactive),
     }
+    _POS[0] = 0
     _POS[1] = len(selected)
-    try:
-        for t in selected:
-            _POS[0] += 1
-            try:
-                results.append(dispatcher[t]())
-            except KeyboardInterrupt:
-                clear_progress()
-                results.append({"component": t.upper(), "status": "SKIP",
-                                "details": {},
-                                "notes": ["Aborted by technician"]})
-                break
-            except Exception as e:
-                results.append({"component": t.upper(), "status": "WARN",
-                                "details": {},
-                                "notes": ["Test crashed: %s" % str(e)[:120]]})
-    finally:
-        pass
+    for t in selected:
+        _POS[0] += 1
+        try:
+            results.append(dispatcher[t]())
+        except KeyboardInterrupt:
+            clear_progress()
+            results.append({"component": t.upper(), "status": "SKIP",
+                            "details": {},
+                            "notes": ["Aborted by technician"]})
+            break
+        except Exception as e:
+            results.append({"component": t.upper(), "status": "WARN",
+                            "details": {},
+                            "notes": ["Test crashed: %s" % str(e)[:120]]})
 
     statuses = [r["status"] for r in results]
     if "FAIL" in statuses:
@@ -1380,8 +1397,9 @@ def main():
     }
 
     if args.json == "-":
-        json.dump(report, sys.stdout, indent=2)
-        sys.stdout.write("\n")
+        json.dump(report, json_stream, indent=2)
+        json_stream.write("\n")
+        json_stream.flush()
     else:
         try:
             with open(args.json, "w") as f:
