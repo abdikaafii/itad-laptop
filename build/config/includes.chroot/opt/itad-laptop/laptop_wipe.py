@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-laptop_wipe.py - ITAD data destruction (v1.0.1)
+laptop_wipe.py - ITAD data destruction (v1.0.2)
 
 DESTRUCTIVE. Wipes internal drives. Never touches USB / external drives
 or the drive the running OS is booted from.
@@ -8,14 +8,24 @@ or the drive the running OS is booted from.
 Step 3 of the ITAD pipeline. Runs AFTER laptop_check.py reports CLEAR
 and BEFORE laptop_test.py.
 
-v1.0.1: bug fixes over v1.0.0 (no change to wipe policy):
-  - NVMe sanitize action codes corrected (1=crypto, 2=block, 3=overwrite);
-    v1.0.0 sent invalid code 4 and could do the wrong operation
-  - ATA Secure Erase: enhanced flag now decided from the correct output
-  - shred progress streamed via reader thread (was stall-prone)
-  - shred stdout -> /dev/null (was a pipe that was never drained)
-  - verify_check_report cross-checks job_id, asset_id, system serial
-  - sanicap handled whether nvme-cli returns int or hex string
+v1.0.2: bug fixes over v1.0.1 (no change to wipe policy):
+  - Works when booted from the Debian live USB: the OS / boot disk is
+    found through /run/live/medium (root is an overlay there, so v1.0.1
+    refused every drive with "Cannot determine the running OS disk")
+  - NVMe sanitize action codes put back to the NVMe spec values:
+    2 = block erase, 3 = overwrite, 4 = crypto erase
+    (1 = exit failure mode, which is never sent)
+  - NVMe sanitize completion is read from the sstat status bits
+    (v1.0.1 parsed it wrongly and could wait up to an hour)
+  - ATA Secure Erase: frozen / locked / enhanced are read from the
+    Security section of hdparm -I (v1.0.1 treated "not frozen" as frozen,
+    so ATA Secure Erase never ran)
+  - If an ATA Secure Erase fails, the temporary drive password is removed
+  - Verification: --method random and the auto fallback now verify
+    correctly; the last 1 MiB is read back as well as the first 1 MiB
+  - --method crypto now works for NVMe drives (crypto erase only)
+    instead of failing as "unsupported"
+  - lsblk RM flag read correctly whether it is true/false or "0"/"1"
 
 Methods (NIST SP 800-88 Rev 1 aligned):
   auto    - pick the strongest available method per device (default)
@@ -23,12 +33,12 @@ Methods (NIST SP 800-88 Rev 1 aligned):
   random  - single overwrite with random data   (Clear)
   dod     - three-pass DoD 5220.22-M            (legacy HDD only)
   purge   - ATA Secure Erase / NVMe Sanitize    (Purge)
-  crypto  - crypto erase for SED / OPAL drives  (Purge)
+  crypto  - NVMe crypto erase only              (Purge)
   discard - blkdiscard / TRIM (SSD only, fast)  (Clear)
 
 Safety model:
   * DRY RUN BY DEFAULT. Nothing is written unless you pass --commit.
-  * Refuses to wipe the disk holding '/'
+  * Refuses to wipe the disk holding '/' or the live boot USB
   * Refuses to wipe removable / USB drives
   * Refuses to wipe drives whose serial is UNKNOWN or a placeholder
   * Refuses if a recent laptop_check.py report is BLOCKED (override --force)
@@ -74,7 +84,7 @@ try:
 except Exception:
     NOW = datetime.now()
 
-VERSION = "1.0.1"
+VERSION = "1.0.2"
 ALL_METHODS = ["auto", "clear", "random", "dod", "purge", "crypto", "discard"]
 
 BAD_SERIALS = {
@@ -92,6 +102,9 @@ FS_SIGNATURES = [
     (82, b"FAT", "FAT"),
     (0x438, b"\x53\xef", "ext4"),
 ]
+
+# Where a Debian live USB mounts itself (used to find the boot USB).
+LIVE_MOUNTS = ("/run/live/medium", "/lib/live/mount/medium", "/cdrom")
 
 # =============================================================================
 # LOOKS
@@ -325,6 +338,23 @@ def read_bytes(path, n):
         return b""
 
 
+def read_tail(path, n):
+    """Read the last n bytes of a file or block device."""
+    try:
+        with open(path, "rb") as f:
+            f.seek(0, os.SEEK_END)
+            size = f.tell()
+            f.seek(max(0, size - n))
+            return f.read(n)
+    except Exception:
+        return b""
+
+
+def _truthy(v):
+    """lsblk gives true/false on new systems and "1"/"0" on old ones."""
+    return str(v).strip().lower() in ("1", "true", "yes")
+
+
 def _system_serial():
     """DMI system serial, or '' if unreadable / placeholder."""
     for p in ("/sys/class/dmi/id/product_serial",
@@ -364,60 +394,26 @@ def clear_progress():
 # =============================================================================
 # disk helpers
 # =============================================================================
-def scan_disks():
-    rc, out, _ = run(["lsblk", "-J", "-b", "-o",
-                      "NAME,PATH,TYPE,FSTYPE,SIZE,RM,TRAN,MODEL,SERIAL"])
-    if rc != 0:
-        return [], ["lsblk failed"]
-    try:
-        data = json.loads(out)
-    except Exception:
-        return [], ["lsblk output unparsable"]
-
-    root_disk = _root_disk()
-    disks = []
-    for d in data.get("blockdevices", []):
-        if d.get("type") != "disk":
-            continue
-        name = d.get("name") or ""
-        if name.startswith(("loop", "sr", "zram", "ram", "dm-")):
-            continue
-        if d.get("path") == root_disk:
-            continue
-        if d.get("rm") == True or d.get("tran") == "usb":
-            if int(d.get("size") or 0) < 32_000_000_000:
-                continue
-        serial = (d.get("serial") or "").strip()
-        disks.append({
-            "path": d.get("path"),
-            "name": name,
-            "model": (d.get("model") or "").strip(),
-            "serial": serial,
-            "size_gb": round(int(d.get("size") or 0) / 1e9, 1),
-            "tran": (d.get("tran") or "").lower(),
-            "rm": bool(d.get("rm")),
-            "fstype": (d.get("fstype") or "").lower(),
-        })
-    return disks, []
-
-
-def _root_disk():
-    rc, out, _ = run(["findmnt", "-no", "SOURCE", "/"])
-    if rc != 0:
+def _findmnt_source(mountpoint):
+    """Device mounted on mountpoint ('' if nothing is mounted there)."""
+    src = ""
+    rc, out, _ = run(["findmnt", "-no", "SOURCE", mountpoint])
+    if rc == 0 and out.strip():
+        src = out.strip().splitlines()[0].strip()
+    else:
         try:
             with open("/proc/mounts") as f:
                 for line in f:
                     p = line.split()
-                    if len(p) >= 2 and p[1] == "/":
-                        out = p[0]
-                        break
-                else:
-                    return None
+                    if len(p) >= 2 and p[1] == mountpoint:
+                        src = p[0]
         except Exception:
-            return None
-    src = out.strip()
-    if not src.startswith("/dev/"):
-        return None
+            pass
+    return re.sub(r"\[.*\]$", "", src)
+
+
+def _disk_of(src):
+    """Whole-disk path (for example /dev/sda) that holds device src."""
     rc, out, _ = run(["lsblk", "-J", "-s", "-o", "PATH,TYPE", src])
     if rc != 0:
         return None
@@ -442,6 +438,70 @@ def _root_disk():
     return None
 
 
+def _is_live_boot():
+    """True when running from a Debian live system (live USB)."""
+    if "boot=live" in read_file("/proc/cmdline").split():
+        return True
+    return os.path.isdir("/run/live") or os.path.isdir("/lib/live/mount")
+
+
+def _protected_disks():
+    """Disks that must never be wiped: the disk holding '/', and the live
+    boot USB. Returns (set_of_disk_paths, determined_ok).
+
+    On a live USB, '/' is an overlay (not a /dev/... disk), so the boot
+    USB is found through its live mount point instead."""
+    prot = set()
+    sources = [_findmnt_source("/")]
+    for mp in LIVE_MOUNTS:
+        sources.append(_findmnt_source(mp))
+    for src in sources:
+        if src.startswith("/dev/"):
+            d = _disk_of(src)
+            if d:
+                prot.add(d)
+    return prot, (bool(prot) or _is_live_boot())
+
+
+def scan_disks():
+    rc, out, _ = run(["lsblk", "-J", "-b", "-o",
+                      "NAME,PATH,TYPE,FSTYPE,SIZE,RM,TRAN,MODEL,SERIAL"])
+    if rc != 0:
+        return [], ["lsblk failed"]
+    try:
+        data = json.loads(out)
+    except Exception:
+        return [], ["lsblk output unparsable"]
+
+    protected, _ = _protected_disks()
+    disks = []
+    for d in data.get("blockdevices", []):
+        if d.get("type") != "disk":
+            continue
+        name = d.get("name") or ""
+        if name.startswith(("loop", "sr", "zram", "ram", "dm-")):
+            continue
+        if d.get("path") in protected:
+            continue
+        rm = _truthy(d.get("rm"))
+        tran = (d.get("tran") or "").lower()
+        if rm or tran == "usb":
+            if int(d.get("size") or 0) < 32_000_000_000:
+                continue
+        serial = (d.get("serial") or "").strip()
+        disks.append({
+            "path": d.get("path"),
+            "name": name,
+            "model": (d.get("model") or "").strip(),
+            "serial": serial,
+            "size_gb": round(int(d.get("size") or 0) / 1e9, 1),
+            "tran": tran,
+            "rm": rm,
+            "fstype": (d.get("fstype") or "").lower(),
+        })
+    return disks, []
+
+
 def disk_size(dev):
     rc, out, _ = run(["blockdev", "--getsize64", dev])
     try:
@@ -460,14 +520,15 @@ def has_bad_serial(serial):
 def preflight(disks, force=False):
     """Return (safe_disks, refusals, warnings)."""
     safe, refusals, warnings = [], [], []
-    root_disk = _root_disk()
-    if root_disk is None:
+    protected, determined = _protected_disks()
+    if not determined:
         refusals.append("Cannot determine the running OS disk — refusing "
                         "to proceed (safety).")
         return safe, refusals, warnings
     for d in disks:
-        if d["path"] == root_disk:
-            refusals.append("%s: this is the running OS disk" % d["path"])
+        if d["path"] in protected:
+            refusals.append("%s: this is the running OS disk or the boot "
+                            "USB" % d["path"])
             continue
         if d["rm"] or d["tran"] == "usb":
             refusals.append("%s: removable / USB drive" % d["path"])
@@ -611,10 +672,12 @@ def _run_shred(dev, passes, zero_final, on_progress):
 def _wipe_overwrite(dev, pattern, passes, on_progress):
     if pattern == "zero":
         rc, note = _run_shred(dev, 0, True, on_progress)
+        ok = "clear"
     else:
         rc, note = _run_shred(dev, passes, False, on_progress)
+        ok = "random"
     return {"rc": rc, "note": note,
-            "achieved": "clear" if rc == 0 else "fail"}
+            "achieved": ok if rc == 0 else "fail"}
 
 
 def _wipe_dod(dev, on_progress):
@@ -632,9 +695,54 @@ def _wipe_discard(dev, on_progress):
             "achieved": "discard" if rc == 0 else "fail"}
 
 
-def _nvme_sanitize(dev):
+def _nvme_sanitize_state(dev):
+    """Read 'nvme sanitize-log'. Returns (state, fraction) where state is
+    'done', 'busy', 'failed' or 'unknown'.
+
+    The status is the low 3 bits of SSTAT:
+      0 = never sanitized, 1 = last one completed OK, 2 = in progress,
+      3 = last one failed, 4 = completed OK (with deallocate)."""
+    rc, out, _ = run(["nvme", "sanitize-log", "-o", "json", dev])
+    if rc != 0:
+        return "unknown", None
+    try:
+        log = json.loads(out)
+    except Exception:
+        return "unknown", None
+    if isinstance(log, dict) and "sstat" not in log:
+        for v in log.values():
+            if isinstance(v, dict) and "sstat" in v:
+                log = v
+                break
+    if not isinstance(log, dict):
+        return "unknown", None
+    sstat = log.get("sstat")
+    if isinstance(sstat, dict):
+        sstat = sstat.get("status", sstat.get("sstat"))
+    try:
+        status = int(sstat, 0) if isinstance(sstat, str) else int(sstat)
+    except Exception:
+        return "unknown", None
+    status &= 0x7
+    frac = None
+    try:
+        frac = int(log.get("sprog")) / 65536.0
+    except Exception:
+        pass
+    if status == 2:
+        return "busy", frac
+    if status in (1, 4):
+        return "done", 1.0
+    if status == 3:
+        return "failed", frac
+    return "unknown", frac
+
+
+def _nvme_sanitize(dev, on_progress, crypto_only=False):
     """NVMe sanitize — prefers crypto erase, then block erase, then
-    overwrite. nvme-cli -a values: 1=crypto, 2=block erase, 3=overwrite."""
+    overwrite. nvme-cli -a values (NVMe spec):
+      1 = exit failure mode (never sent), 2 = block erase,
+      3 = overwrite, 4 = crypto erase."""
     if not shutil.which("nvme"):
         return {"rc": 1, "note": "nvme-cli not installed",
                 "achieved": "fail"}
@@ -653,31 +761,48 @@ def _nvme_sanitize(dev):
     #   bit 0 = crypto erase, bit 1 = block erase, bit 2 = overwrite
     action = None
     if caps & 0x01:
-        action = "1"    # crypto — best (destroys media key)
-    elif caps & 0x02:
-        action = "2"    # block erase
-    elif caps & 0x04:
-        action = "3"    # overwrite
+        action = "4"    # crypto erase — best (destroys the media key)
+    elif not crypto_only:
+        if caps & 0x02:
+            action = "2"    # block erase
+        elif caps & 0x04:
+            action = "3"    # overwrite
     if action is None:
-        return {"rc": 1, "note": "sanitize not supported",
+        return {"rc": 1,
+                "note": ("crypto erase not supported" if crypto_only
+                         else "sanitize not supported"),
                 "achieved": "fail"}
     rc, out, err = run(["nvme", "sanitize", "-a", action, dev],
                        timeout=3600)
     if rc != 0:
         return {"rc": rc, "note": (err or out).strip()[:200],
                 "achieved": "fail"}
-    deadline = time.time() + 3600
+    time.sleep(2)
+    deadline = time.time() + 4 * 3600
+    unknown_since = None
     while time.time() < deadline:
-        rc2, out2, _ = run(["nvme", "sanitize-log", "-o", "json", dev])
-        if rc2 == 0:
-            try:
-                log = json.loads(out2)
-                if int(log.get("sstat", {}).get("sanact", 0)) == 0:
-                    return {"rc": 0, "note": "sanitize action %s complete"
-                            % action, "achieved": "purge"}
-            except Exception:
-                pass
+        state, frac = _nvme_sanitize_state(dev)
+        if state == "done":
+            clear_progress()
+            return {"rc": 0, "note": "sanitize action %s complete" % action,
+                    "achieved": "purge"}
+        if state == "failed":
+            clear_progress()
+            return {"rc": 1, "note": "sanitize reported failure",
+                    "achieved": "fail"}
+        if state == "unknown":
+            if unknown_since is None:
+                unknown_since = time.time()
+            elif time.time() - unknown_since > 120:
+                clear_progress()
+                return {"rc": 1, "note": "could not read sanitize status",
+                        "achieved": "fail"}
+        else:
+            unknown_since = None
+        if frac is not None:
+            on_progress("sanitize", frac, "action %s" % action)
         time.sleep(2)
+    clear_progress()
     return {"rc": 124, "note": "sanitize timed out", "achieved": "fail"}
 
 
@@ -689,20 +814,57 @@ def _nvme_format(dev):
             "achieved": "clear" if rc == 0 else "fail"}
 
 
+def _ata_security_info(ident):
+    """Read the 'Security:' section of 'hdparm -I' output.
+
+    In that section hdparm prints lines such as:
+        supported / not enabled / not locked / not frozen /
+        supported: enhanced erase
+    so the text 'frozen' alone is NOT enough ('not frozen' contains it)."""
+    info = {"supported": False, "enabled": False, "locked": False,
+            "frozen": False, "enhanced": False}
+    parts = ident.split("\nSecurity:", 1)
+    if len(parts) < 2:
+        return info
+    for ln in parts[1].splitlines()[1:]:
+        if ln and not ln[0].isspace():
+            break          # next section starts
+        t = " ".join(ln.split()).lower()
+        if t == "supported":
+            info["supported"] = True
+        elif t == "enabled":
+            info["enabled"] = True
+        elif t == "locked":
+            info["locked"] = True
+        elif t == "frozen":
+            info["frozen"] = True
+        elif t.startswith("supported: enhanced erase"):
+            info["enhanced"] = True
+    return info
+
+
 def _ata_secure_erase(dev):
     if not shutil.which("hdparm"):
         return {"rc": 1, "note": "hdparm not installed",
                 "achieved": "fail"}
     rc, ident, _ = run(["hdparm", "-I", dev])
-    if rc != 0 or "not supported" in ident.lower():
+    if rc != 0:
+        return {"rc": 1, "note": "hdparm -I failed", "achieved": "fail"}
+    info = _ata_security_info(ident)
+    if not info["supported"]:
         return {"rc": 1, "note": "Security: not supported",
                 "achieved": "fail"}
-    if "frozen" in ident.lower():
+    if info["frozen"]:
         return {"rc": 1,
                 "note": "Security state is FROZEN — power-cycle the "
                         "laptop (full shutdown, not reboot) and retry",
                 "achieved": "fail"}
-    use_enhanced = "enhanced" in ident.lower()
+    if info["locked"]:
+        return {"rc": 1,
+                "note": "drive is security-locked (a password is already "
+                        "set on it)",
+                "achieved": "fail"}
+    use_enhanced = info["enhanced"]
     run(["hdparm", "-S", "0", dev], timeout=10)   # disable standby
     rc, out, err = run(["hdparm", "--user-master", "u",
                         "--security-set-pass", "wipe", dev], timeout=30)
@@ -713,6 +875,10 @@ def _ata_secure_erase(dev):
                   else "--security-erase")
     rc, out, err = run(["hdparm", "--user-master", "u",
                         erase_flag, "wipe", dev], timeout=4 * 3600)
+    if rc != 0:
+        # Do not leave the drive locked with our temporary password.
+        run(["hdparm", "--user-master", "u",
+             "--security-disable", "wipe", dev], timeout=30)
     return {"rc": rc, "note": (err or out).strip()[:200],
             "achieved": "purge" if rc == 0 else "fail"}
 
@@ -724,7 +890,7 @@ def _wipe_purge(disk, on_progress):
     is_ssd = "ssd" in (disk.get("model") or "").lower() or is_nvme
 
     if is_nvme:
-        r = _nvme_sanitize(dev)
+        r = _nvme_sanitize(dev, on_progress)
         if r["achieved"] == "purge":
             return r
         r = _nvme_format(dev)
@@ -743,6 +909,18 @@ def _wipe_purge(disk, on_progress):
             return r
 
     return {"rc": 1, "note": "no Purge method available", "achieved": "fail"}
+
+
+def _wipe_crypto(disk, on_progress):
+    """Crypto erase only. Supported here for NVMe drives."""
+    dev = disk["path"]
+    is_nvme = ("nvme" in dev) or (disk.get("tran") == "nvme")
+    if not is_nvme:
+        return {"rc": 1,
+                "note": "crypto erase is only supported here for NVMe "
+                        "drives",
+                "achieved": "fail"}
+    return _nvme_sanitize(dev, on_progress, crypto_only=True)
 
 
 # =============================================================================
@@ -767,14 +945,17 @@ def verify_wipe(disk, achieved):
     if sig:
         out["notes"].append("filesystem signature still present: %s" % sig)
         return out
-    if achieved in ("clear", "random", "dod", "discard", "purge-format"):
+    if achieved in ("clear", "random", "clear-fallback", "dod", "discard",
+                    "purge-format"):
         head = read_bytes(dev, 1024 * 1024)
-        if not head:
-            out["notes"].append("could not read back first MiB")
+        tail = read_tail(dev, 1024 * 1024)
+        if not head or not tail:
+            out["notes"].append("could not read back first / last MiB")
             return out
         out["sample_sha256"] = hashlib.sha256(head).hexdigest()
-        if achieved == "clear" and any(b != 0 for b in head[:4096]):
-            out["notes"].append("first 4 KiB are not all zeros")
+        # Zero-fill methods must read back as all zeros.
+        if achieved in ("clear", "dod") and (any(head) or any(tail)):
+            out["notes"].append("first / last MiB are not all zeros")
             return out
         out["verified"] = True
     elif achieved == "purge":
@@ -1000,6 +1181,10 @@ def main():
                 res = _wipe_overwrite(disk["path"], "random", 1, progress_line)
                 achieved = ("clear-fallback" if res["rc"] == 0 else "fail")
                 row["note"] = res.get("note", "")
+        elif args.method == "crypto":
+            res = _wipe_crypto(disk, progress_line)
+            achieved = res["achieved"]
+            row["note"] = res.get("note", "")
         elif args.method == "clear":
             res = _wipe_overwrite(disk["path"], "zero", 0, progress_line)
             achieved = res["achieved"]
