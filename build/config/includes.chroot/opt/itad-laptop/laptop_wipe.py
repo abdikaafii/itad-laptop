@@ -1,12 +1,21 @@
 #!/usr/bin/env python3
 """
-laptop_wipe.py - ITAD data destruction (v1.0.0)
+laptop_wipe.py - ITAD data destruction (v1.0.1)
 
 DESTRUCTIVE. Wipes internal drives. Never touches USB / external drives
 or the drive the running OS is booted from.
 
 Step 3 of the ITAD pipeline. Runs AFTER laptop_check.py reports CLEAR
 and BEFORE laptop_test.py.
+
+v1.0.1: bug fixes over v1.0.0 (no change to wipe policy):
+  - NVMe sanitize action codes corrected (1=crypto, 2=block, 3=overwrite);
+    v1.0.0 sent invalid code 4 and could do the wrong operation
+  - ATA Secure Erase: enhanced flag now decided from the correct output
+  - shred progress streamed via reader thread (was stall-prone)
+  - shred stdout -> /dev/null (was a pipe that was never drained)
+  - verify_check_report cross-checks job_id, asset_id, system serial
+  - sanicap handled whether nvme-cli returns int or hex string
 
 Methods (NIST SP 800-88 Rev 1 aligned):
   auto    - pick the strongest available method per device (default)
@@ -23,6 +32,7 @@ Safety model:
   * Refuses to wipe removable / USB drives
   * Refuses to wipe drives whose serial is UNKNOWN or a placeholder
   * Refuses if a recent laptop_check.py report is BLOCKED (override --force)
+  * Refuses if the check report's job_id / asset_id / serial do not match
   * Requires typing  WIPE:<first-serial>  to confirm, unless both
     --commit AND --yes-i-mean-it are given
   * --method auto prefers Purge over Clear when the drive supports it,
@@ -54,6 +64,7 @@ import re
 import shutil
 import subprocess
 import sys
+import threading
 import time
 from datetime import datetime
 
@@ -63,7 +74,7 @@ try:
 except Exception:
     NOW = datetime.now()
 
-VERSION = "1.0.0"
+VERSION = "1.0.1"
 ALL_METHODS = ["auto", "clear", "random", "dod", "purge", "crypto", "discard"]
 
 BAD_SERIALS = {
@@ -73,15 +84,13 @@ BAD_SERIALS = {
     "0123456789", "1234567890",
 }
 
-# Legacy filesystem signatures we expect to disappear after a wipe.
-# (offset, bytes) — checked in a 2 MiB sample from the start of the disk.
 FS_SIGNATURES = [
     (3, b"NTFS    ", "NTFS"),
     (3, b"-FVE-FS-", "BitLocker"),
     (0, b"LUKS\xba\xbe", "LUKS"),
     (54, b"FAT", "FAT"),
     (82, b"FAT", "FAT"),
-    (0x438, b"\x53\xef", "ext4"),   # ext* magic
+    (0x438, b"\x53\xef", "ext4"),
 ]
 
 # =============================================================================
@@ -316,6 +325,20 @@ def read_bytes(path, n):
         return b""
 
 
+def _system_serial():
+    """DMI system serial, or '' if unreadable / placeholder."""
+    for p in ("/sys/class/dmi/id/product_serial",
+              "/sys/class/dmi/id/board_serial"):
+        try:
+            with open(p) as f:
+                v = f.read().strip()
+            if v and v.lower() not in BAD_SERIALS:
+                return v
+        except Exception:
+            pass
+    return ""
+
+
 def _progress_bar(frac, width=28):
     frac = max(0.0, min(1.0, frac))
     n = int(round(frac * width))
@@ -342,7 +365,6 @@ def clear_progress():
 # disk helpers
 # =============================================================================
 def scan_disks():
-    """Return internal, non-removable disks (same policy as laptop_check)."""
     rc, out, _ = run(["lsblk", "-J", "-b", "-o",
                       "NAME,PATH,TYPE,FSTYPE,SIZE,RM,TRAN,MODEL,SERIAL"])
     if rc != 0:
@@ -459,8 +481,10 @@ def preflight(disks, force=False):
     return safe, refusals, warnings
 
 
-def verify_check_report(path, expected_serials, force=False):
-    """Look at a laptop_check.py report. Return (ok, message)."""
+def verify_check_report(path, expected_serials, force=False,
+                        job_id="", asset_id=""):
+    """Look at a laptop_check.py report. Cross-check that it belongs to
+    *this* laptop, not one from an earlier job."""
     if not path or not os.path.exists(path):
         return True, "no check report found (skipping cross-check)"
     try:
@@ -468,12 +492,33 @@ def verify_check_report(path, expected_serials, force=False):
             rep = json.load(f)
     except Exception as e:
         return True, "check report unreadable: %s" % e
+
     result = str(rep.get("result", "?"))
-    if result == "BLOCKED":
-        if force:
-            return True, "check report was BLOCKED — proceeding anyway (--force)"
-        return False, "check report is BLOCKED — run laptop_check.py again, " \
-                      "or use --force if you really mean it"
+
+    # 1. Refuse BLOCKED unless forced.
+    if result == "BLOCKED" and not force:
+        return False, ("check report is BLOCKED — re-run laptop_check.py "
+                       "or use --force if you really mean it")
+
+    # 2. Refuse if the report is for a different job/asset.
+    if job_id and rep.get("job_id") and job_id != rep.get("job_id"):
+        return False, ("check report is for job %r, this run is %r — "
+                       "wrong report?"
+                       % (rep.get("job_id"), job_id))
+    if asset_id and rep.get("asset_id") and asset_id != rep.get("asset_id"):
+        return False, ("check report is for asset %r, this run is %r — "
+                       "wrong report?"
+                       % (rep.get("asset_id"), asset_id))
+
+    # 3. Refuse if the check report's system serial differs from this box.
+    rep_serial = ((rep.get("identity") or {}).get("serial") or "")
+    if rep_serial and rep_serial.lower() not in BAD_SERIALS:
+        cur_serial = _system_serial()
+        if cur_serial and cur_serial != rep_serial:
+            return False, ("check report is for serial %s, this machine "
+                           "reports %s — wrong machine?"
+                           % (rep_serial, cur_serial))
+
     age = ""
     try:
         t = datetime.fromisoformat(rep.get("time", ""))
@@ -487,54 +532,83 @@ def verify_check_report(path, expected_serials, force=False):
 # wipe methods
 # =============================================================================
 def _run_shred(dev, passes, zero_final, on_progress):
-    """Run shred and parse its progress. Returns (rc, tail)."""
+    """Run shred with live progress. A reader thread keeps the UI responsive
+    even when shred is quiet between progress updates (shred uses \\r)."""
+    if not shutil.which("shred"):
+        return 1, "shred not installed"
     total = disk_size(dev)
     cmd = ["shred", "-v", "-n", str(passes)]
     if zero_final:
         cmd.append("-z")
     cmd.append(dev)
-    if not shutil.which("shred"):
-        return 1, "shred not installed"
     env = os.environ.copy()
     env["LC_ALL"] = "C"
     env["LANG"] = "C"
-    p = subprocess.Popen(cmd, stdout=subprocess.PIPE,
-                         stderr=subprocess.PIPE, text=True, env=env)
-    buf = ""
-    last = 0
-    try:
-        while True:
-            rc = p.poll()
-            chunk = p.stderr.read(1)
-            if chunk:
+    p = subprocess.Popen(cmd, stdout=subprocess.DEVNULL,
+                         stderr=subprocess.PIPE, env=env)
+    lines = []
+    fd = p.stderr.fileno()
+
+    def _parse(line):
+        m = re.search(r"(\d+(?:\.\d+)?)\s*([KMGTP])iB", line)
+        pass_m = re.search(r"pass (\d+)/(\d+)", line)
+        if m and total:
+            mult = {"K": 1024, "M": 1024 ** 2, "G": 1024 ** 3,
+                    "T": 1024 ** 4, "P": 1024 ** 5}[m.group(2)]
+            frac = float(m.group(1)) * mult / total
+            note = ("pass %s/%s" % (pass_m.group(1), pass_m.group(2))
+                    if pass_m else "")
+            on_progress("wiping", frac, note)
+
+    def _reader():
+        buf = b""
+        try:
+            while True:
+                chunk = os.read(fd, 256)
+                if not chunk:
+                    break
                 buf += chunk
-                if chunk == "\r" or chunk == "\n":
-                    # shred: /dev/sdX: pass 1/3 (random)... 123MiB
-                    m = re.search(r"(\d+(?:\.\d+)?)\s*([KMGTP])iB", buf)
-                    pass_m = re.search(r"pass (\d+)/(\d+)", buf)
-                    if m and total:
-                        mult = {"K": 1024, "M": 1024**2, "G": 1024**3,
-                                "T": 1024**4, "P": 1024**5}[m.group(2)]
-                        done = float(m.group(1)) * mult
-                        frac = done / total
-                        note = ("pass %s/%s" % (pass_m.group(1),
-                                                pass_m.group(2))
-                                if pass_m else "")
-                        if time.time() - last > 0.2:
-                            progress_line("wiping", frac, note)
-                            last = time.time()
-                    buf = buf.split(chunk, 1)[-1]
-            if rc is not None:
-                break
-    finally:
-        p.wait()
+                while True:
+                    idx = -1
+                    for i, b in enumerate(buf):
+                        if b in (10, 13):  # \n, \r
+                            idx = i
+                            break
+                    if idx < 0:
+                        break
+                    line = buf[:idx].decode("utf-8", "replace")
+                    buf = buf[idx + 1:]
+                    if line.strip():
+                        lines.append(line)
+                        _parse(line)
+        except Exception:
+            pass
+        if buf:
+            line = buf.decode("utf-8", "replace")
+            if line.strip():
+                lines.append(line)
+                _parse(line)
+
+    th = threading.Thread(target=_reader, daemon=True)
+    th.start()
+    try:
+        while p.poll() is None:
+            time.sleep(0.3)
+    except BaseException:
+        try:
+            p.kill()
+            p.wait(timeout=2)
+        except Exception:
+            pass
         clear_progress()
-    tail = (buf or "").strip().splitlines()[-2:]
-    return p.returncode, " ".join(tail)
+        raise
+    th.join(timeout=5)
+    clear_progress()
+    tail = " ".join([l.strip() for l in lines[-2:] if l.strip()])
+    return p.returncode, tail
 
 
 def _wipe_overwrite(dev, pattern, passes, on_progress):
-    """pattern: 'zero' or 'random'. Returns dict."""
     if pattern == "zero":
         rc, note = _run_shred(dev, 0, True, on_progress)
     else:
@@ -559,29 +633,39 @@ def _wipe_discard(dev, on_progress):
 
 
 def _nvme_sanitize(dev):
-    """NVMe sanitize — block erase if supported, else crypto, else overwrite."""
+    """NVMe sanitize — prefers crypto erase, then block erase, then
+    overwrite. nvme-cli -a values: 1=crypto, 2=block erase, 3=overwrite."""
     if not shutil.which("nvme"):
-        return {"rc": 1, "note": "nvme-cli not installed", "achieved": "fail"}
+        return {"rc": 1, "note": "nvme-cli not installed",
+                "achieved": "fail"}
     rc, out, _ = run(["nvme", "id-ctrl", "-o", "json", dev])
-    caps = ""
+    caps = 0
     if rc == 0:
         try:
-            caps = str(json.loads(out).get("sanicap", ""))
+            raw = json.loads(out).get("sanicap", 0)
+            if isinstance(raw, str):
+                caps = int(raw, 16) if raw else 0
+            else:
+                caps = int(raw)
         except Exception:
-            pass
-    # sanicap bits: 1=block, 2=overwrite, 4=crypto.  Pick the strongest.
+            caps = 0
+    # Sanicap bits (NVMe Identify Controller):
+    #   bit 0 = crypto erase, bit 1 = block erase, bit 2 = overwrite
     action = None
-    for bit, act in ((4, "4"), (1, "2"), (2, "3")):
-        if caps and (int(caps, 16) & bit):
-            action = act
-            break
+    if caps & 0x01:
+        action = "1"    # crypto — best (destroys media key)
+    elif caps & 0x02:
+        action = "2"    # block erase
+    elif caps & 0x04:
+        action = "3"    # overwrite
     if action is None:
-        return {"rc": 1, "note": "sanitize not supported", "achieved": "fail"}
-    rc, out, err = run(["nvme", "sanitize", "-a", action, dev], timeout=3600)
+        return {"rc": 1, "note": "sanitize not supported",
+                "achieved": "fail"}
+    rc, out, err = run(["nvme", "sanitize", "-a", action, dev],
+                       timeout=3600)
     if rc != 0:
         return {"rc": rc, "note": (err or out).strip()[:200],
                 "achieved": "fail"}
-    # Poll sanitize-log until Sanact == 0
     deadline = time.time() + 3600
     while time.time() < deadline:
         rc2, out2, _ = run(["nvme", "sanitize-log", "-o", "json", dev])
@@ -589,8 +673,8 @@ def _nvme_sanitize(dev):
             try:
                 log = json.loads(out2)
                 if int(log.get("sstat", {}).get("sanact", 0)) == 0:
-                    return {"rc": 0, "note": "sanitize complete",
-                            "achieved": "purge"}
+                    return {"rc": 0, "note": "sanitize action %s complete"
+                            % action, "achieved": "purge"}
             except Exception:
                 pass
         time.sleep(2)
@@ -607,22 +691,24 @@ def _nvme_format(dev):
 
 def _ata_secure_erase(dev):
     if not shutil.which("hdparm"):
-        return {"rc": 1, "note": "hdparm not installed", "achieved": "fail"}
-    rc, out, _ = run(["hdparm", "-I", dev])
-    if rc != 0 or "not supported" in out.lower():
-        return {"rc": 1, "note": "Security: not supported", "achieved": "fail"}
-    if "frozen" in out.lower():
-        return {"rc": 1,
-                "note": "Security state is FROZEN — power-cycle the laptop "
-                        "and try again",
+        return {"rc": 1, "note": "hdparm not installed",
                 "achieved": "fail"}
-    run(["hdparm", "-S", "0", dev], timeout=10)  # disable standby
+    rc, ident, _ = run(["hdparm", "-I", dev])
+    if rc != 0 or "not supported" in ident.lower():
+        return {"rc": 1, "note": "Security: not supported",
+                "achieved": "fail"}
+    if "frozen" in ident.lower():
+        return {"rc": 1,
+                "note": "Security state is FROZEN — power-cycle the "
+                        "laptop (full shutdown, not reboot) and retry",
+                "achieved": "fail"}
+    use_enhanced = "enhanced" in ident.lower()
+    run(["hdparm", "-S", "0", dev], timeout=10)   # disable standby
     rc, out, err = run(["hdparm", "--user-master", "u",
                         "--security-set-pass", "wipe", dev], timeout=30)
     if rc != 0:
         return {"rc": rc, "note": (err or out).strip()[:200],
                 "achieved": "fail"}
-    use_enhanced = shutil.which("hdparm") and "enhanced" in out.lower()
     erase_flag = ("--security-erase-enhanced" if use_enhanced
                   else "--security-erase")
     rc, out, err = run(["hdparm", "--user-master", "u",
@@ -637,24 +723,20 @@ def _wipe_purge(disk, on_progress):
     is_nvme = ("nvme" in dev) or (disk.get("tran") == "nvme")
     is_ssd = "ssd" in (disk.get("model") or "").lower() or is_nvme
 
-    # 1. NVMe sanitize
     if is_nvme:
         r = _nvme_sanitize(dev)
         if r["achieved"] == "purge":
             return r
-        # 2. NVMe format (user data erase)
         r = _nvme_format(dev)
         if r["achieved"] in ("clear",):
             r["achieved"] = "purge-format"
             return r
 
-    # 3. ATA Secure Erase
     if not is_nvme:
         r = _ata_secure_erase(dev)
         if r["achieved"] == "purge":
             return r
 
-    # 4. Discard (SSD only) — fast but still NIST Clear
     if is_ssd:
         r = _wipe_discard(dev, on_progress)
         if r["achieved"] == "discard":
@@ -674,7 +756,6 @@ def _has_fs_signature(dev, sample=2 * 1024 * 1024):
     for off, sig, name in FS_SIGNATURES:
         if len(head) >= off + len(sig) and head[off:off + len(sig)] == sig:
             return name
-    # ext4 magic sits at 1024 + 0x38, already covered by 0x438
     return None
 
 
@@ -711,7 +792,6 @@ def smart_short_test(disk, on_progress):
     rc, out, err = run(["smartctl", "-t", "short", disk["path"]], timeout=30)
     if rc != 0:
         return {"ok": False, "note": (err or out).strip()[:120]}
-    # Poll for completion (short test is usually <2 min)
     deadline = time.time() + 180
     while time.time() < deadline:
         rc, out, _ = run(["smartctl", "-l", "selftest", disk["path"]],
@@ -847,7 +927,9 @@ def main():
 
     ok, msg = verify_check_report(args.check_report,
                                   [d["serial"] for d in safe],
-                                  force=args.force)
+                                  force=args.force,
+                                  job_id=args.job_id,
+                                  asset_id=args.asset_id)
     if not ok:
         big_banner(["", "%s  %s" % (ICON["bad"], spaced("BLOCKED")),
                     msg, "Use --force to override.", ""], "red")
