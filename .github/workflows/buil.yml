@@ -31,7 +31,8 @@ jobs:
             --mirror-bootstrap http://archive.ubuntu.com/ubuntu \
             --mirror-chroot http://archive.ubuntu.com/ubuntu \
             --mirror-binary http://archive.ubuntu.com/ubuntu \
-            --memtest none
+            --memtest none \
+            --syslinux-theme "live-build"
 
       - name: Build ISO
         run: |
