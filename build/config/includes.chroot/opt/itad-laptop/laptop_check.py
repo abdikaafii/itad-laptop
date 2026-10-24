@@ -9,6 +9,7 @@ v3.1.1: bug fixes over v3.1.0 (no change to check logic):
   - file handles closed properly
   - --verbose now prints diagnostics
   - variable shadowing and unused parameters removed
+  - PAST state now also lists Azure AD traces
 """
 import argparse, glob, fnmatch, json, os, re, shutil, subprocess, sys, tempfile
 import threading, time
@@ -772,7 +773,6 @@ def analyze_autopilot(root):
         hive = find_ci(root, hive_rel)
         if not hive:
             continue
-        # Stream search — hives can be 100+ MB, do not cap at 8 MB.
         hits = file_contains_any(hive, all_hints)
         for needle, label in AUTOPILOT_REG_HINTS:
             if needle in hits:
@@ -895,6 +895,9 @@ def autopilot_box(analysis, os_checked):
             rows += para(e["path"], ("dim",), indent=7)
         for k in analysis["mdm"]:
             rows += item(paint("[PAST]", "yellow"), k)
+        for e in analysis["azure_ad"]:
+            rows += item(paint("[AZURE-AD]", "yellow"), e["description"])
+            rows += para(e["path"], ("dim",), indent=11)
         rows.append(None)
         rows += para("This laptop was enrolled at some point. The active "
                      "enrollment is gone, but logs / keys remain. Usually "
@@ -986,8 +989,7 @@ def main():
     if not args.json:
         args.json = _default_json_path()
 
-    # --json - : keep stdout clean for the JSON payload. All human output
-    # (banner, steps, results) goes to stderr.
+    # --json - : keep stdout clean for JSON; human output goes to stderr.
     json_stream = sys.stdout
     if args.json == "-":
         sys.stdout = sys.stderr
