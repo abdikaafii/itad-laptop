@@ -7,10 +7,16 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-22.04
+    timeout-minutes: 120
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
+          df -h /
 
       - name: Install build dependencies
         run: |
@@ -20,7 +26,7 @@ jobs:
             syslinux-utils squashfs-tools dosfstools mtools \
             grub-efi-amd64-bin grub-pc-bin
 
-      - name: Verify isolinux files exist (should pass on focal)
+      - name: Verify isolinux files exist
         run: |
           ls -la /usr/lib/ISOLINUX/isolinux.bin
           ls -la /usr/lib/syslinux/modules/bios/vesamenu.c32
@@ -42,12 +48,22 @@ jobs:
 
       - name: Build ISO
         run: |
+          set -o pipefail
           cd build
-          sudo lb build
+          sudo lb build 2>&1 | tee build.log
 
       - name: Upload ISO
         uses: actions/upload-artifact@v4
         with:
           name: ITAD-Live-ISO
           path: build/*.iso
+          retention-days: 5
+
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: build/build.log
+          if-no-files-found: ignore
           retention-days: 5
