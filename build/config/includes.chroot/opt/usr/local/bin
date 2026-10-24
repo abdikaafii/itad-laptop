@@ -1,0 +1,2 @@
+#!/bin/sh
+exec sudo python3 /opt/itad-laptop/itad_run.py "$@"
