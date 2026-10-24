@@ -17,7 +17,6 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y live-build xorriso isolinux syslinux-common squashfs-tools dosfstools mtools
 
-      # --- THE FIX FOR THE DPKG-DIVERT ERROR ---
       - name: Patch live-build for start-stop-daemon bug
         run: |
           sudo sed -i '/# begin-remove-after: released:forky/,/# end-remove-after/d' /usr/lib/live/build/lb_chroot_dpkg
@@ -31,7 +30,8 @@ jobs:
             --archive-areas "main restricted universe multiverse" \
             --mirror-bootstrap http://archive.ubuntu.com/ubuntu \
             --mirror-chroot http://archive.ubuntu.com/ubuntu \
-            --mirror-binary http://archive.ubuntu.com/ubuntu
+            --mirror-binary http://archive.ubuntu.com/ubuntu \
+            --memtest none
 
       - name: Build ISO
         run: |
