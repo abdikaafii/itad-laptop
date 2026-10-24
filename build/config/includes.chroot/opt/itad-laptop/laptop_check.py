@@ -1,12 +1,16 @@
 #!/usr/bin/env python3
 """
-laptop_check.py - ITAD pre-wipe check (v3.1.0)  MULTI-PLATFORM
+laptop_check.py - ITAD pre-wipe check (v3.1.1)  MULTI-PLATFORM
 READ ONLY. Never wipes or writes to any internal drive.
 
-v3.1.0: new coloured terminal interface. The checks themselves are
-unchanged from v3.0.0. Use --no-color for plain text.
+v3.1.1: bug fixes over v3.1.0 (no change to check logic):
+  - --json - no longer pollutes stdout (human output goes to stderr)
+  - registry hives are streamed, not capped at 8 MB
+  - file handles closed properly
+  - --verbose now prints diagnostics
+  - variable shadowing and unused parameters removed
 """
-import argparse, glob, json, os, re, shutil, subprocess, sys, tempfile
+import argparse, glob, fnmatch, json, os, re, shutil, subprocess, sys, tempfile
 import threading, time
 from datetime import datetime
 
@@ -16,7 +20,7 @@ try:
 except Exception:
     NOW = datetime.now()
 
-VERSION = "3.1.0"
+VERSION = "3.1.1"
 
 BAD_SERIALS = {
     "", "none", "default string", "to be filled by o.e.m.",
@@ -38,7 +42,6 @@ WIN_ABSOLUTE_FILES = [
     "ProgramData/Absolute Software",
 ]
 
-# (path, substate, description, parse_json)
 AUTOPILOT_ITEMS = [
     ("Windows/ServiceState/Autopilot/AutopilotDDSZTDFile.json",
      "ACTIVE", "Autopilot provisioning profile (DDSZTD)", True),
@@ -115,18 +118,24 @@ ENCRYPTED_FS = {"bitlocker", "crypto_luks", "filevault"}
 LIVE_MOUNT_PREFIXES = ("/run/live", "/usr/lib/live", "/rofs", "/cdrom",
                        "/lib/live", "/live")
 
+VERBOSE = False
+
+
+def vlog(msg):
+    if VERBOSE:
+        print(paint("    · " + msg, "dim"))
+
+
 # =============================================================================
-# LOOKS  --  colours, boxes, banners.  Display only, no checking logic here.
-# Colours switch off by themselves when output is saved to a file / piped,
-# or when you pass --no-color.  Works offline, needs nothing extra installed.
+# LOOKS
 # =============================================================================
 ANSI_RE = re.compile(r"\033\[[0-9;?]*[A-Za-z]")
 _TERM = os.environ.get("TERM", "")
-LIVE = sys.stdout.isatty() and _TERM != "dumb"        # can redraw lines
-USE_COLOR = LIVE and not os.environ.get("NO_COLOR")   # can use colours
+LIVE = sys.stdout.isatty() and _TERM != "dumb"
+USE_COLOR = LIVE and not os.environ.get("NO_COLOR")
 _ENC = (getattr(sys.stdout, "encoding", None) or "").lower()
 UNICODE = "utf" in _ENC
-FANCY = UNICODE and _TERM != "linux"   # fancy icons only where fonts have them
+FANCY = UNICODE and _TERM != "linux"
 
 try:
     W = max(60, min(shutil.get_terminal_size((80, 24)).columns, 78))
@@ -173,7 +182,6 @@ def pad(s, n):
 
 
 def _trunc(s, n):
-    """Cut a (possibly coloured) string to n visible characters."""
     if vlen(s) <= n:
         return s
     out, count = [], 0
@@ -223,7 +231,6 @@ _STATE = {
 
 
 def tag(state, label=None):
-    """Coloured status tag with icon, e.g.  ✔ PASS  /  ✖ BLOCKED."""
     key = str(state).split(" (")[0].strip().upper()
     icon, color = _STATE.get(key, ("info", "cyan"))
     text = "%s %s" % (ICON[icon], label if label is not None else state)
@@ -239,7 +246,6 @@ def rule(title, color="cyan"):
 
 
 def box(title, rows, color="cyan"):
-    """Boxed section. rows = list of strings; None draws a divider line."""
     t = (" %s " % title) if title else ""
     fill = max(0, W - 3 - len(t))
     print(paint(BX["tl"] + BX["h"], color) + paint(t, "bold", color)
@@ -255,7 +261,6 @@ def box(title, rows, color="cyan"):
 
 
 def kv(label, value, style=(), lw=11):
-    """'Label   value' rows (wraps long values)."""
     text = str(value).strip() or "-"
     lines = _wrap(text, INNER - lw - 2) or ["-"]
     rows = []
@@ -266,7 +271,6 @@ def kv(label, value, style=(), lw=11):
 
 
 def item(prefix, text, style=(), indent=0):
-    """Bullet row: coloured prefix + wrapped text."""
     plen = vlen(prefix)
     lines = _wrap(text, INNER - plen - 1 - indent) or [""]
     rows = []
@@ -287,6 +291,8 @@ def title_banner(title, right=""):
     left = " " + title
     mid = max(1, inner - len(left) - len(right) - 1)
     body = paint(left, "bold") + " " * mid + paint(right, "dim") + " "
+    if vlen(body) > inner:
+        body = _trunc(body, inner)
     print(paint(BX["TL"] + BX["H"] * inner + BX["TR"], "cyan"))
     print(paint(BX["V"], "cyan") + pad(body, inner) + paint(BX["V"], "cyan"))
     print(paint(BX["BL"] + BX["H"] * inner + BX["BR"], "cyan"))
@@ -300,7 +306,6 @@ _BANNER_STYLE = {
 
 
 def big_banner(lines, color):
-    """Full-width result block: green / yellow / red."""
     print()
     if USE_COLOR:
         st = _BANNER_STYLE[color]
@@ -318,12 +323,11 @@ def big_banner(lines, color):
 
 
 def spaced(text):
-    """'CLEAR' -> 'C L E A R' for a bold banner look."""
     return " ".join(text)
 
 
 # =============================================================================
-# Live progress line for the scan steps (spinner while a step is running)
+# Live progress line
 # =============================================================================
 class Step:
     FRAMES = "|/-\\"
@@ -345,6 +349,12 @@ class Step:
             sys.stdout.flush()
             i += 1
             self._stop.wait(0.12)
+
+    def __del__(self):
+        try:
+            self._stop.set()
+        except Exception:
+            pass
 
     def _end(self, kind, note):
         self._stop.set()
@@ -378,7 +388,7 @@ class Step:
 
 
 # =============================================================================
-# CHECKS  (same logic as v3.0.0)
+# CHECKS
 # =============================================================================
 def run(cmd, timeout=30):
     env = os.environ.copy()
@@ -396,20 +406,56 @@ def run(cmd, timeout=30):
 
 def read_file(p):
     try:
-        return open(p, "r", errors="replace").read().strip()
+        with open(p, "r", errors="replace") as f:
+            return f.read().strip()
     except Exception:
         return ""
 
 
-def read_bytes(p, n=8 * 1024 * 1024):
+def read_bytes(p, n=None):
     try:
-        return open(p, "rb").read(n)
+        with open(p, "rb") as f:
+            if n is None:
+                return f.read()
+            chunks, remaining = [], n
+            while remaining > 0:
+                buf = f.read(remaining)
+                if not buf:
+                    break
+                chunks.append(buf)
+                remaining -= len(buf)
+            return b"".join(chunks)
     except Exception:
         return b""
 
 
+def file_contains_any(path, needles, chunk=4 * 1024 * 1024):
+    """Stream a (potentially huge) file looking for any of `needles`.
+    Returns the subset of `needles` (original form) that were found."""
+    if not needles:
+        return set()
+    found = set()
+    lower_map = {n.lower(): n for n in needles}
+    try:
+        with open(path, "rb") as f:
+            carry = b""
+            while True:
+                buf = f.read(chunk)
+                if not buf:
+                    break
+                hay = (carry + buf).lower()
+                for nl, orig in lower_map.items():
+                    if orig not in found and nl in hay:
+                        found.add(orig)
+                carry = hay[-256:]
+                if len(found) == len(lower_map):
+                    break
+    except Exception:
+        pass
+    return found
+
+
 def _fnmatch_ci(name, pat):
-    import fnmatch
     return fnmatch.fnmatch(name.lower(), pat.lower())
 
 
@@ -506,12 +552,13 @@ def _secure_boot():
 
 def _boot_parent_disk():
     try:
-        for line in open("/proc/mounts"):
-            p = line.split()
-            if len(p) >= 2 and p[1] == "/":
-                return re.sub(
-                    r"(/dev/(?:nvme\d+n\d+|mmcblk\d+|sd[a-z]+|"
-                    r"vd[a-z]+|hd[a-z]+))p?\d*$", r"\1", p[0])
+        with open("/proc/mounts") as f:
+            for line in f:
+                p = line.split()
+                if len(p) >= 2 and p[1] == "/":
+                    return re.sub(
+                        r"(/dev/(?:nvme\d+n\d+|mmcblk\d+|sd[a-z]+|"
+                        r"vd[a-z]+|hd[a-z]+))p?\d*$", r"\1", p[0])
     except Exception:
         pass
     return None
@@ -599,7 +646,8 @@ def _has_bitlocker_sig(dev):
 
 def _has_luks_sig(dev):
     try:
-        return open(dev, "rb").read(6)[:4] == b"LUKS"
+        with open(dev, "rb") as f:
+            return f.read(4) == b"LUKS"
     except Exception:
         return False
 
@@ -680,9 +728,11 @@ def check_win_absolute(root):
 
 def _parse_autopilot_json(path):
     try:
-        data = json.loads(open(path, "r", errors="replace").read(256 * 1024))
+        with open(path, "r", errors="replace") as f:
+            data = json.loads(f.read(256 * 1024))
     except Exception:
         return {}
+
     def _find(d, *keys):
         for k in keys:
             if isinstance(d, dict) and k in d:
@@ -700,7 +750,6 @@ def _parse_autopilot_json(path):
 
 
 def analyze_autopilot(root):
-    """Returns a structured analysis with clear state."""
     a = {"state": "NONE", "active": [], "past": [], "tenant": [],
          "mdm": [], "azure_ad": []}
 
@@ -716,17 +765,21 @@ def analyze_autopilot(root):
                 a["tenant"].append(parsed)
         (a["active"] if substate == "ACTIVE" else a["past"]).append(entry)
 
+    all_hints = ([n for n, _ in AUTOPILOT_REG_HINTS] +
+                 [n for n, _ in MDM_REG_HINTS])
+
     for hive_rel in REGISTRY_HIVES:
         hive = find_ci(root, hive_rel)
         if not hive:
             continue
-        data = read_bytes(hive).lower()
+        # Stream search — hives can be 100+ MB, do not cap at 8 MB.
+        hits = file_contains_any(hive, all_hints)
         for needle, label in AUTOPILOT_REG_HINTS:
-            if needle.lower() in data:
+            if needle in hits:
                 a["active"].append({"description": label + " (registry)",
                                     "path": hive_rel.replace("/", "\\")})
         for needle, label in MDM_REG_HINTS:
-            if needle.lower() in data:
+            if needle in hits:
                 a["mdm"].append(label)
 
     for rel, label in AZURE_AD_ITEMS:
@@ -763,7 +816,7 @@ def _default_json_path():
 
 
 # =============================================================================
-# SCREEN SECTIONS  (new interface)
+# SCREEN SECTIONS
 # =============================================================================
 def device_box(platform, ident, internal):
     ml = ident["model"] or "-"
@@ -800,8 +853,7 @@ def absolute_box(abs_result, abs_signs, warns):
     box("ABSOLUTE", rows, color)
 
 
-def autopilot_box(analysis, os_checked, ap_result):
-    """Same decisions as v3.0.0, shown in a box. Returns the state label."""
+def autopilot_box(analysis, os_checked):
     if not os_checked:
         rows = [tag("UNKNOWN", "UNKNOWN  could not inspect the Windows drive"),
                 ""]
@@ -912,7 +964,7 @@ def cannot_box(encrypted, unreadable, cannot):
 # MAIN
 # =============================================================================
 def main():
-    global USE_COLOR
+    global USE_COLOR, VERBOSE
     ap = argparse.ArgumentParser(description="ITAD pre-wipe check")
     ap.add_argument("--job-id", default="")
     ap.add_argument("--asset-id", default="")
@@ -924,6 +976,7 @@ def main():
     args = ap.parse_args()
     if args.no_color:
         USE_COLOR = False
+    VERBOSE = args.verbose
 
     if hasattr(os, "geteuid") and os.geteuid() != 0:
         print(paint("Must run as root. Use: sudo python3 laptop_check.py ...",
@@ -932,6 +985,12 @@ def main():
 
     if not args.json:
         args.json = _default_json_path()
+
+    # --json - : keep stdout clean for the JSON payload. All human output
+    # (banner, steps, results) goes to stderr.
+    json_stream = sys.stdout
+    if args.json == "-":
+        sys.stdout = sys.stderr
 
     title_banner("ITAD PRE-WIPE CHECK", "v%s   READ ONLY" % VERSION)
     box("JOB", kv("Time", NOW.strftime("%Y-%m-%d  %H:%M:%S"))
@@ -961,7 +1020,12 @@ def main():
     else:
         st.ok("%d drive(s), %d partition(s)" % (len(internal), len(parts)))
 
-    tmp = tempfile.mkdtemp(prefix="itad_lc_")
+    try:
+        tmp = tempfile.mkdtemp(prefix="itad_lc_")
+    except Exception as e:
+        print(paint("Cannot create temp dir: %s" % e, "bold", "red"))
+        sys.exit(4)
+
     mounted = []
     unreadable, encrypted = [], []
     win_roots, mac_roots = [], []
@@ -1012,6 +1076,7 @@ def main():
                 try_fs = {"ntfs", "ntfs3", "ext4", "btrfs", "xfs", "fat32"}
             if fs not in try_fs:
                 st.skip("not checked (fs=%s)" % (fs or "?"))
+                vlog("%s skipped: fs=%s not in try_fs" % (dev, fs or "?"))
                 continue
 
             mnt = os.path.join(tmp, "p%d" % i)
@@ -1019,6 +1084,7 @@ def main():
             if not mount_ro(dev, mnt, fs):
                 unreadable.append("%s (fs=%s)" % (dev, fs or "?"))
                 st.warn("could not mount")
+                vlog("%s: mount_ro failed (fs=%s)" % (dev, fs or "?"))
                 continue
             mounted.append(mnt)
             found = "mounted read-only, no OS found"
@@ -1027,13 +1093,14 @@ def main():
                 win_roots.append(mnt)
                 win_parts.append(dev)
                 abs_signs.extend(check_win_absolute(mnt))
-                ap = analyze_autopilot(mnt)
-                if ap["state"] == "ACTIVE":
+                ap_data = analyze_autopilot(mnt)
+                if ap_data["state"] == "ACTIVE":
                     autopilot_analysis["state"] = "ACTIVE"
-                elif ap["state"] == "PAST" and autopilot_analysis["state"] != "ACTIVE":
+                elif (ap_data["state"] == "PAST"
+                      and autopilot_analysis["state"] != "ACTIVE"):
                     autopilot_analysis["state"] = "PAST"
                 for k in ("active", "past", "tenant", "mdm", "azure_ad"):
-                    autopilot_analysis[k].extend(ap[k])
+                    autopilot_analysis[k].extend(ap_data[k])
                 found = "Windows volume"
             elif platform == "mac":
                 if find_ci(mnt, "Library") or find_ci(mnt, "System/Library"):
@@ -1051,8 +1118,9 @@ def main():
             unmount(m)
         shutil.rmtree(tmp, ignore_errors=True)
 
-    os_checked = ((platform == "pc" and win_roots) or
-                  (platform == "mac" and mac_roots))
+    os_checked = bool(
+        (platform == "pc" and win_roots) or
+        (platform == "mac" and mac_roots))
     cannot = list(encrypted) + list(unreadable) + list(disk_notes)
     if platform == "chromebook":
         cannot.append("ChromeOS — check Settings > About ChromeOS > "
@@ -1108,8 +1176,9 @@ def main():
     }
 
     if args.json == "-":
-        json.dump(report, sys.stdout, indent=2)
-        sys.stdout.write("\n")
+        json.dump(report, json_stream, indent=2)
+        json_stream.write("\n")
+        json_stream.flush()
     else:
         try:
             with open(args.json, "w") as f:
@@ -1120,7 +1189,7 @@ def main():
     rule("RESULTS")
     device_box(platform, ident, internal)
     absolute_box(abs_result, abs_signs, warns)
-    autopilot_box(autopilot_analysis, os_checked, ap_result)
+    autopilot_box(autopilot_analysis, os_checked)
     cannot_box(encrypted, unreadable, cannot)
 
     if result == "BLOCKED":
