@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """
-laptop_test.py - ITAD component test (v1.1.1)  READ-MOSTLY
+laptop_test.py - ITAD component test (v1.1.2)  READ-MOSTLY
 
 Step 2 of the ITAD pipeline. Runs AFTER laptop_check.py and the wipe.
 
+v1.1.2: updated default JSON path to match itad_run.py pipeline.
 v1.1.1: bug fixes over v1.1.0 (no change to test logic):
   - --json - no longer pollutes stdout (human output goes to stderr)
   - tempfile.mktemp() replaced with mkstemp (avoids races / symlink attacks)
@@ -58,7 +59,7 @@ try:
 except Exception:
     NOW = datetime.now()
 
-VERSION = "1.1.1"
+VERSION = "1.1.2"
 ALL_TESTS = ["cpu", "ram", "drive", "battery", "screen", "keyboard",
              "touchpad", "webcam", "speakers", "wifi", "usb"]
 
@@ -1315,7 +1316,8 @@ def main():
         sys.exit(3)
 
     if not args.json:
-        default = "/tmp/laptop_test.json"
+        # Updated to use the persistent home directory
+        default = os.path.expanduser("~/itad-reports/laptop_test.json")
         for cand in ("/run/live/medium", "/cdrom", "/media/usb", "/mnt/usb"):
             if os.path.isdir(cand) and os.access(cand, os.W_OK):
                 default = os.path.join(cand, "laptop_test.json")
