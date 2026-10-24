@@ -1,1 +1,31 @@
+name: Build ITAD ISO
 
+on:
+  push:
+    branches: [ "main", "master" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y live-build xorriso isolinux syslinux-common squashfs-tools dosfstools mtools
+
+      - name: Build ISO
+        run: |
+          cd build
+          sudo lb clean
+          sudo lb build
+
+      - name: Upload ISO
+        uses: actions/upload-artifact@v4
+        with:
+          name: ITAD-Live-ISO
+          path: build/*.iso
+          retention-days: 5
