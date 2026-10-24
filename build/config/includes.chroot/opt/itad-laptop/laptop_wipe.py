@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-laptop_wipe.py - ITAD data destruction (v1.0.2)
+laptop_wipe.py - ITAD data destruction (v1.0.3)
 
 DESTRUCTIVE. Wipes internal drives. Never touches USB / external drives
 or the drive the running OS is booted from.
@@ -8,6 +8,7 @@ or the drive the running OS is booted from.
 Step 3 of the ITAD pipeline. Runs AFTER laptop_check.py reports CLEAR
 and BEFORE laptop_test.py.
 
+v1.0.3: updated default JSON path to match itad_run.py out-dir.
 v1.0.2: bug fixes over v1.0.1 (no change to wipe policy):
   - Works when booted from the Debian live USB: the OS / boot disk is
     found through /run/live/medium (root is an overlay there, so v1.0.1
@@ -84,7 +85,7 @@ try:
 except Exception:
     NOW = datetime.now()
 
-VERSION = "1.0.2"
+VERSION = "1.0.3"
 ALL_METHODS = ["auto", "clear", "random", "dod", "purge", "crypto", "discard"]
 
 BAD_SERIALS = {
@@ -1044,7 +1045,8 @@ def main():
         sys.exit(3)
 
     if not args.json:
-        default = "/tmp/laptop_wipe.json"
+        # Updated to use the persistent home directory
+        default = os.path.expanduser("~/itad-reports/laptop_wipe.json")
         for cand in ("/run/live/medium", "/cdrom", "/media/usb", "/mnt/usb"):
             if os.path.isdir(cand) and os.access(cand, os.W_OK):
                 default = os.path.join(cand, "laptop_wipe.json")
@@ -1061,6 +1063,7 @@ def main():
                      "/cdrom/laptop_check.json",
                      "/media/usb/laptop_check.json",
                      "/mnt/usb/laptop_check.json",
+                     os.path.expanduser("~/itad-reports/laptop_check.json"),
                      "/tmp/laptop_check.json"):
             if os.path.exists(cand):
                 args.check_report = cand
