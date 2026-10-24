@@ -12,6 +12,7 @@ v1.1.1: bug fixes over v1.1.0 (no change to test logic):
   - 'clear' uses ANSI rather than shelling out
   - SMART error note is stored as a plain string, not str-or-list
   - battery: WARN when a battery is present but health is unreadable
+  - drive: WARN when SMART status is unknown (was PASS)
 
 Tests:
   cpu       - identity, temperature, 30s load test, thermal throttling
@@ -68,11 +69,11 @@ ALL_TESTS = ["cpu", "ram", "drive", "battery", "screen", "keyboard",
 # =============================================================================
 ANSI_RE = re.compile(r"\033\[[0-9;?]*[A-Za-z]")
 _TERM = os.environ.get("TERM", "")
-LIVE = sys.stdout.isatty() and _TERM != "dumb"
-USE_COLOR = LIVE and not os.environ.get("NO_COLOR")
+LIVE = sys.stdout.isatty() and _TERM != "dumb"        # can redraw lines
+USE_COLOR = LIVE and not os.environ.get("NO_COLOR")   # can use colours
 _ENC = (getattr(sys.stdout, "encoding", None) or "").lower()
 UNICODE = "utf" in _ENC
-FANCY = UNICODE and _TERM != "linux"
+FANCY = UNICODE and _TERM != "linux"   # fancy icons only where fonts have them
 
 try:
     W = max(60, min(shutil.get_terminal_size((80, 24)).columns, 78))
@@ -370,7 +371,6 @@ def clear_progress():
 
 
 def run_with_bar(cmd, expected_s, label, timeout, extra=None):
-    """Like run(), but shows a live progress bar. Output to temp files."""
     env = os.environ.copy()
     env["LC_ALL"] = "C"
     env["LANG"] = "C"
@@ -646,8 +646,9 @@ def test_drives():
 
         if info.get("healthy") is False:
             head = tag("FAIL", "SMART FAILED")
-        elif info.get("healthy") is None and info.get("smart_error"):
-            head = tag("WARN", "SMART not read")
+        elif info.get("healthy") is None:
+            # smartctl ran but did not report pass/fail, or failed outright
+            head = tag("WARN", "SMART status unknown")
         else:
             head = tag("PASS", "SMART OK")
         print("  %s  %s %s" % (head, path,
