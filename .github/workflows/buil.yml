@@ -17,10 +17,20 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y live-build xorriso isolinux syslinux-common squashfs-tools dosfstools mtools
 
+      - name: Configure Live Build
+        run: |
+          cd build
+          sudo lb config \
+            --distribution jammy \
+            --parent-distribution jammy \
+            --archive-areas "main restricted universe multiverse" \
+            --mirror-bootstrap http://archive.ubuntu.com/ubuntu \
+            --mirror-chroot http://archive.ubuntu.com/ubuntu \
+            --mirror-binary http://archive.ubuntu.com/ubuntu
+
       - name: Build ISO
         run: |
           cd build
-          sudo lb clean
           sudo lb build
 
       - name: Upload ISO
