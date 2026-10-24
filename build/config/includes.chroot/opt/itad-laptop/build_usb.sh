@@ -3,7 +3,21 @@
 # WARNING: this DESTROYS everything on the target USB device.
 
 set -euo pipefail
-ITAD_VERSION="1.0.0"
+ITAD_VERSION="1.0.1" # Updated version
+
+# --- Check for root privileges ---
+if [ "$EUID" -ne 0 ]; then
+  echo "Error: Please run this script with sudo: sudo ./build_usb.sh" >&2
+  exit 1
+fi
+
+# --- Check for required dependencies ---
+for cmd in dd parted wipefs partprobe mkfs.ext4 mkfs.vfat; do
+    if ! command -v "$cmd" &> /dev/null; then
+        echo "Error: Required command '$cmd' is not installed." >&2
+        exit 1
+    fi
+done
 
 if [ -t 1 ]; then
     B=$'\033[1m'; R=$'\033[0;31m'; G=$'\033[0;32m'; Y=$'\033[0;33m'
@@ -48,7 +62,7 @@ done
 say "validating inputs"
 [ -f "$ISO" ]    || die "ISO not found: $ISO"
 ISO_SIZE=$(stat -c %s "$ISO")
-[ "$ISO_SIZE" -gt 1000000000 ] || die "ISO smaller than 1 GB — wrong file?"
+[ "$ISO_SIZE" -gt 1000000000 ] || die "ISO smaller than 1 GB — wrong file? Make sure you downloaded the Ubuntu Desktop ISO, not a minimal/Debian ISO."
 
 [ -b "$DEVICE" ] || die "not a block device: $DEVICE"
 DEV_NAME=$(basename "$DEVICE")
@@ -153,6 +167,12 @@ say "copying ITAD tools"
 TMP_MNT=$(mktemp -d)
 mount "$ITAD_PART" "$TMP_MNT"
 
+# Check if first_boot.sh exists before the loop
+if [ ! -f "first_boot.sh" ]; then
+    warn "CRITICAL: first_boot.sh is missing in this directory!"
+    warn "The USB will build, but the ITAD setup will NOT run automatically on first boot."
+fi
+
 for f in laptop_check.py laptop_wipe.py laptop_test.py \
          itad_run.py itad_report.py first_boot.sh \
          QUICKREF.md TEST_PLAN.md build_usb.sh; do
@@ -161,6 +181,7 @@ for f in laptop_check.py laptop_wipe.py laptop_test.py \
         case "$f" in
             *.py|*.sh) chmod 755 "$TMP_MNT/$f" ;;
         esac
+        echo "  Copied: $f"
     else
         warn "missing: $f"
     fi
@@ -177,11 +198,14 @@ echo "================================================================"
 echo "  USB ready: $DEVICE"
 echo
 echo "  Next steps:"
-echo "    1. Boot a test laptop from this USB"
-echo "    2. Open a terminal in the live session"
-echo "    3. Find the ITAD partition:  lsblk -o NAME,LABEL,SIZE"
-echo "    4. Run:  sudo bash /media/*/ITAD/first_boot.sh"
-echo "         (or: sudo mount /dev/sdX3 /mnt && sudo bash /mnt/first_boot.sh)"
+echo "    1. Boot a target laptop from this USB (Choose 'Try Ubuntu')"
+echo "    2. Open a terminal (Ctrl+Alt+T) in the live session"
+echo "    3. Find the ITAD partition name:"
+echo "         lsblk -o NAME,LABEL,SIZE"
+echo "    4. Mount it and run the setup script:"
+echo "         sudo mkdir -p /mnt/itad"
+echo "         sudo mount /dev/sdX3 /mnt/itad   <-- (Replace sdX3 with your actual ITAD partition)"
+echo "         sudo bash /mnt/itad/first_boot.sh"
 echo
 echo "  Persistence means apt installs survive reboots."
 echo "  first_boot.sh is idempotent — safe to re-run."
