@@ -18,39 +18,36 @@ jobs:
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
           df -h /
 
-      - name: Install build dependencies
+      - name: Write build script
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            live-build xorriso isolinux syslinux syslinux-common \
-            syslinux-utils squashfs-tools dosfstools mtools \
-            grub-efi-amd64-bin grub-pc-bin
-
-      - name: Verify isolinux files exist
-        run: |
-          ls -la /usr/lib/ISOLINUX/isolinux.bin
-          ls -la /usr/lib/syslinux/modules/bios/vesamenu.c32
-          ls -la /usr/lib/syslinux/modules/bios/ldlinux.c32
-
-      - name: Configure Live Build
-        run: |
-          cd build
-          sudo lb config \
-            --distribution jammy \
-            --archive-areas "main restricted universe multiverse" \
-            --mirror-bootstrap http://archive.ubuntu.com/ubuntu \
-            --mirror-chroot http://archive.ubuntu.com/ubuntu \
-            --mirror-binary http://archive.ubuntu.com/ubuntu \
+          cat > build-iso.sh <<'EOF'
+          set -euxo pipefail
+          export DEBIAN_FRONTEND=noninteractive
+          apt-get update
+          apt-get install -y live-build debootstrap xorriso squashfs-tools \
+            syslinux syslinux-common isolinux mtools dosfstools \
+            grub-pc-bin grub-efi-amd64-bin ca-certificates cpio zstd gnupg
+          cd /work/build
+          lb config \
+            --distribution bookworm \
+            --architectures amd64 \
+            --archive-areas "main contrib non-free non-free-firmware" \
+            --binary-images iso-hybrid \
+            --bootloaders "syslinux,grub-efi" \
+            --debian-installer none \
             --memtest none \
-            --syslinux-theme "live-build" \
-            --bootloader "syslinux" \
-            --bootappend-live "boot=live components quiet splash"
+            --iso-volume "ITAD-LIVE" \
+            --bootappend-live "boot=live components quiet"
+          lb build 2>&1 | tee build.log
+          EOF
 
-      - name: Build ISO
+      - name: Build ISO (Debian 12 container)
         run: |
-          set -o pipefail
-          cd build
-          sudo lb build 2>&1 | tee build.log
+          docker run --rm --privileged -v "$PWD":/work debian:bookworm bash /work/build-iso.sh
+
+      - name: Fix file owner
+        if: always()
+        run: sudo chown -R "$(id -u):$(id -g)" build || true
 
       - name: Upload ISO
         uses: actions/upload-artifact@v4
