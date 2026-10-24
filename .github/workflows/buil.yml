@@ -15,7 +15,11 @@ jobs:
       - name: Install build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y live-build xorriso isolinux syslinux-common squashfs-tools dosfstools mtools grub-efi-amd64-bin grub-pc-bin
+          sudo apt-get install -y \
+            live-build xorriso isolinux syslinux syslinux-common \
+            syslinux-utils syslinux-efi \
+            squashfs-tools dosfstools mtools \
+            grub-efi-amd64-bin grub-pc-bin
 
       - name: Patch live-build for start-stop-daemon bug
         run: |
@@ -33,7 +37,8 @@ jobs:
             --mirror-binary http://archive.ubuntu.com/ubuntu \
             --memtest none \
             --syslinux-theme "live-build" \
-            --bootloader grub-efi
+            --bootloader "syslinux" \
+            --bootappend-live "boot=live components quiet splash"
 
       - name: Build ISO
         run: |
