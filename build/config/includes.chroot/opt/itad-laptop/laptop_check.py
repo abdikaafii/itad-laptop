@@ -1,9 +1,13 @@
 #!/usr/bin/env python3
 """
-laptop_check.py - ITAD pre-wipe check (v3.0.0)  MULTI-PLATFORM
+laptop_check.py - ITAD pre-wipe check (v3.1.0)  MULTI-PLATFORM
 READ ONLY. Never wipes or writes to any internal drive.
+
+v3.1.0: new coloured terminal interface. The checks themselves are
+unchanged from v3.0.0. Use --no-color for plain text.
 """
 import argparse, glob, json, os, re, shutil, subprocess, sys, tempfile
+import threading, time
 from datetime import datetime
 
 try:
@@ -12,7 +16,7 @@ try:
 except Exception:
     NOW = datetime.now()
 
-VERSION = "3.0.0"
+VERSION = "3.1.0"
 
 BAD_SERIALS = {
     "", "none", "default string", "to be filled by o.e.m.",
@@ -111,7 +115,271 @@ ENCRYPTED_FS = {"bitlocker", "crypto_luks", "filevault"}
 LIVE_MOUNT_PREFIXES = ("/run/live", "/usr/lib/live", "/rofs", "/cdrom",
                        "/lib/live", "/live")
 
+# =============================================================================
+# LOOKS  --  colours, boxes, banners.  Display only, no checking logic here.
+# Colours switch off by themselves when output is saved to a file / piped,
+# or when you pass --no-color.  Works offline, needs nothing extra installed.
+# =============================================================================
+ANSI_RE = re.compile(r"\033\[[0-9;?]*[A-Za-z]")
+_TERM = os.environ.get("TERM", "")
+LIVE = sys.stdout.isatty() and _TERM != "dumb"        # can redraw lines
+USE_COLOR = LIVE and not os.environ.get("NO_COLOR")   # can use colours
+_ENC = (getattr(sys.stdout, "encoding", None) or "").lower()
+UNICODE = "utf" in _ENC
+FANCY = UNICODE and _TERM != "linux"   # fancy icons only where fonts have them
 
+try:
+    W = max(60, min(shutil.get_terminal_size((80, 24)).columns, 78))
+except Exception:
+    W = 78
+INNER = W - 4
+
+if UNICODE:
+    BX = dict(h="─", v="│", tl="┌", tr="┐", bl="└", br="┘", ml="├", mr="┤",
+              H="═", V="║", TL="╔", TR="╗", BL="╚", BR="╝",
+              full="█", empty="░", ell="…")
+else:
+    BX = dict(h="-", v="|", tl="+", tr="+", bl="+", br="+", ml="+", mr="+",
+              H="=", V="|", TL="+", TR="+", BL="+", BR="+",
+              full="#", empty=".", ell="~")
+
+if FANCY:
+    ICON = {"ok": "✔", "bad": "✖", "warn": "▲", "skip": "○", "info": "●",
+            "lock": "■", "go": "▸"}
+else:
+    ICON = {"ok": "+", "bad": "x", "warn": "!", "skip": "-", "info": "*",
+            "lock": "#", "go": ">"}
+
+_CODES = {
+    "reset": "0", "bold": "1", "dim": "2",
+    "black": "30", "red": "31", "green": "32", "yellow": "33",
+    "blue": "34", "magenta": "35", "cyan": "36", "white": "37",
+    "bg_red": "41", "bg_green": "42", "bg_yellow": "43", "bg_blue": "44",
+}
+
+
+def paint(text, *styles):
+    if not USE_COLOR or not styles:
+        return text
+    return "\033[%sm%s\033[0m" % (";".join(_CODES[s] for s in styles), text)
+
+
+def vlen(s):
+    return len(ANSI_RE.sub("", s))
+
+
+def pad(s, n):
+    return s + " " * max(0, n - vlen(s))
+
+
+def _trunc(s, n):
+    """Cut a (possibly coloured) string to n visible characters."""
+    if vlen(s) <= n:
+        return s
+    out, count = [], 0
+    for tok in re.split(r"(\033\[[0-9;?]*[A-Za-z])", s):
+        if ANSI_RE.fullmatch(tok):
+            out.append(tok)
+            continue
+        room = n - 1 - count
+        if room <= 0:
+            break
+        take = tok[:room]
+        out.append(take)
+        count += len(take)
+        if len(take) < len(tok):
+            break
+    return "".join(out) + BX["ell"] + ("\033[0m" if USE_COLOR else "")
+
+
+def _wrap(text, width):
+    lines, cur = [], ""
+    for word in str(text).split():
+        while len(word) > width:
+            if cur:
+                lines.append(cur)
+                cur = ""
+            lines.append(word[:width])
+            word = word[width:]
+        if cur and len(cur) + 1 + len(word) > width:
+            lines.append(cur)
+            cur = word
+        else:
+            cur = (cur + " " + word) if cur else word
+    if cur:
+        lines.append(cur)
+    return lines
+
+
+_STATE = {
+    "CLEAR": ("ok", "green"), "CLEAN": ("ok", "green"),
+    "PASS": ("ok", "green"), "OK": ("ok", "green"),
+    "BLOCKED": ("bad", "red"), "FAIL": ("bad", "red"),
+    "ACTIVE": ("bad", "red"),
+    "WARN": ("warn", "yellow"), "PAST": ("warn", "yellow"),
+    "CANNOT CHECK": ("warn", "yellow"), "UNKNOWN": ("warn", "yellow"),
+    "SKIP": ("skip", None),
+}
+
+
+def tag(state, label=None):
+    """Coloured status tag with icon, e.g.  ✔ PASS  /  ✖ BLOCKED."""
+    key = str(state).split(" (")[0].strip().upper()
+    icon, color = _STATE.get(key, ("info", "cyan"))
+    text = "%s %s" % (ICON[icon], label if label is not None else state)
+    return paint(text, "bold", color) if color else paint(text, "dim")
+
+
+def rule(title, color="cyan"):
+    t = " %s " % title
+    fill = max(2, W - 4 - len(t))
+    print()
+    print(paint(BX["h"] * 2, color) + paint(t, "bold", color)
+          + paint(BX["h"] * fill, color))
+
+
+def box(title, rows, color="cyan"):
+    """Boxed section. rows = list of strings; None draws a divider line."""
+    t = (" %s " % title) if title else ""
+    fill = max(0, W - 3 - len(t))
+    print(paint(BX["tl"] + BX["h"], color) + paint(t, "bold", color)
+          + paint(BX["h"] * fill + BX["tr"], color))
+    for row in rows:
+        if row is None:
+            print(paint(BX["ml"] + BX["h"] * (W - 2) + BX["mr"], color))
+            continue
+        row = _trunc(row, INNER)
+        print(paint(BX["v"], color) + " " + pad(row, INNER) + " "
+              + paint(BX["v"], color))
+    print(paint(BX["bl"] + BX["h"] * (W - 2) + BX["br"], color))
+
+
+def kv(label, value, style=(), lw=11):
+    """'Label   value' rows (wraps long values)."""
+    text = str(value).strip() or "-"
+    lines = _wrap(text, INNER - lw - 2) or ["-"]
+    rows = []
+    for i, ln in enumerate(lines):
+        lab = paint(label.ljust(lw), "dim") if i == 0 else " " * lw
+        rows.append(lab + "  " + (paint(ln, *style) if style else ln))
+    return rows
+
+
+def item(prefix, text, style=(), indent=0):
+    """Bullet row: coloured prefix + wrapped text."""
+    plen = vlen(prefix)
+    lines = _wrap(text, INNER - plen - 1 - indent) or [""]
+    rows = []
+    for i, ln in enumerate(lines):
+        lead = prefix if i == 0 else " " * plen
+        rows.append(" " * indent + lead + " "
+                    + (paint(ln, *style) if style else ln))
+    return rows
+
+
+def para(text, style=(), indent=0):
+    return [" " * indent + (paint(ln, *style) if style else ln)
+            for ln in _wrap(text, INNER - indent)]
+
+
+def title_banner(title, right=""):
+    inner = W - 2
+    left = " " + title
+    mid = max(1, inner - len(left) - len(right) - 1)
+    body = paint(left, "bold") + " " * mid + paint(right, "dim") + " "
+    print(paint(BX["TL"] + BX["H"] * inner + BX["TR"], "cyan"))
+    print(paint(BX["V"], "cyan") + pad(body, inner) + paint(BX["V"], "cyan"))
+    print(paint(BX["BL"] + BX["H"] * inner + BX["BR"], "cyan"))
+
+
+_BANNER_STYLE = {
+    "green": ("bold", "black", "bg_green"),
+    "red": ("bold", "white", "bg_red"),
+    "yellow": ("bold", "black", "bg_yellow"),
+}
+
+
+def big_banner(lines, color):
+    """Full-width result block: green / yellow / red."""
+    print()
+    if USE_COLOR:
+        st = _BANNER_STYLE[color]
+        blank = paint(" " * W, *st)
+        print(blank)
+        for ln in lines:
+            print(paint(ln.center(W), *st))
+        print(blank)
+    else:
+        print(BX["TL"] + BX["H"] * (W - 2) + BX["TR"])
+        for ln in lines:
+            print(BX["V"] + ln.center(W - 2) + BX["V"])
+        print(BX["BL"] + BX["H"] * (W - 2) + BX["BR"])
+    print()
+
+
+def spaced(text):
+    """'CLEAR' -> 'C L E A R' for a bold banner look."""
+    return " ".join(text)
+
+
+# =============================================================================
+# Live progress line for the scan steps (spinner while a step is running)
+# =============================================================================
+class Step:
+    FRAMES = "|/-\\"
+
+    def __init__(self, label):
+        self.label = label
+        self.t0 = time.time()
+        self._stop = threading.Event()
+        self._th = None
+        if LIVE:
+            self._th = threading.Thread(target=self._spin, daemon=True)
+            self._th.start()
+
+    def _spin(self):
+        i = 0
+        while not self._stop.is_set():
+            sys.stdout.write("\r\033[K  %s %s" % (
+                paint(self.FRAMES[i % 4], "cyan"), self.label))
+            sys.stdout.flush()
+            i += 1
+            self._stop.wait(0.12)
+
+    def _end(self, kind, note):
+        self._stop.set()
+        if self._th:
+            self._th.join(timeout=1)
+            sys.stdout.write("\r\033[K")
+        icon, color = {"ok": (ICON["ok"], "green"),
+                       "warn": (ICON["warn"], "yellow"),
+                       "fail": (ICON["bad"], "red"),
+                       "skip": (ICON["skip"], None)}[kind]
+        mark = paint(icon, "bold", color) if color else paint(icon, "dim")
+        dt = time.time() - self.t0
+        took = paint(" (%.1fs)" % dt, "dim") if dt >= 0.5 else ""
+        line = "  %s %s %s%s" % (mark, self.label.ljust(30)[:30],
+                                 paint(note, color) if color and note
+                                 else paint(note, "dim") if note else "",
+                                 took)
+        print(_trunc(line, W))
+
+    def ok(self, note=""):
+        self._end("ok", note)
+
+    def warn(self, note=""):
+        self._end("warn", note)
+
+    def fail(self, note=""):
+        self._end("fail", note)
+
+    def skip(self, note=""):
+        self._end("skip", note)
+
+
+# =============================================================================
+# CHECKS  (same logic as v3.0.0)
+# =============================================================================
 def run(cmd, timeout=30):
     env = os.environ.copy()
     env["LC_ALL"] = "C"
@@ -494,129 +762,204 @@ def _default_json_path():
     return "/tmp/laptop_check.json"
 
 
-def _wrap(text, w):
-    words, lines, cur = text.split(), [], ""
-    for x in words:
-        if len(cur) + len(x) + 1 > w and cur:
-            lines.append(cur)
-            cur = x
-        else:
-            cur = (cur + " " + x).strip()
-    if cur:
-        lines.append(cur)
-    return lines
+# =============================================================================
+# SCREEN SECTIONS  (new interface)
+# =============================================================================
+def device_box(platform, ident, internal):
+    ml = ident["model"] or "-"
+    if ident["version"] and ident["version"] != ident["model"]:
+        ml += " " + ident["version"]
+    rows = []
+    rows += kv("Platform", PLATFORM_LABEL.get(platform, platform))
+    rows += kv("Make", ident["manufacturer"] or "-")
+    rows += kv("Model", ml)
+    rows += kv("Serial", ident["serial"], ("bold",))
+    rows += kv("BIOS", "%s %s (%s)" % (ident["bios_vendor"],
+                                       ident["bios_version"],
+                                       ident["bios_date"]))
+    rows += kv("Boot mode", "%s   SecureBoot: %s" % (ident["boot_mode"],
+                                                     ident["secure_boot"]))
+    if internal:
+        for d in internal:
+            rows += kv("Drive", "%s  %s  %s GB" % (
+                d["path"], d["model"] or "-", d["size_gb"]))
+    else:
+        rows += kv("Drive", "none found", ("yellow",))
+    box("DEVICE", rows, "cyan")
 
 
-def print_autopilot_section(analysis, os_checked, platform):
-    print("-" * 60)
-    print(" AUTOPILOT / MDM ENROLLMENT STATUS")
-    print("-" * 60)
+def absolute_box(abs_result, abs_signs, warns):
+    rows = [tag(abs_result) + paint("   firmware / disk agent check", "dim")]
+    if abs_signs:
+        rows.append("")
+        for s in abs_signs:
+            rows += item(paint(ICON["bad"], "bold", "red"), s)
+    for w in warns:
+        rows += item(paint(ICON["info"], "yellow"), w, ("yellow",))
+    color = {"CLEAR": "green", "BLOCKED": "red"}.get(abs_result, "yellow")
+    box("ABSOLUTE", rows, color)
 
+
+def autopilot_box(analysis, os_checked, ap_result):
+    """Same decisions as v3.0.0, shown in a box. Returns the state label."""
     if not os_checked:
-        print(" STATE: UNKNOWN — could not inspect the Windows drive")
-        print()
-        print(" The Windows volume could not be read (encrypted, missing,")
-        print(" or unsupported filesystem). Autopilot and MDM enrollment")
-        print(" cannot be checked. A manager must decide, or the drive")
-        print(" must be unlocked / decrypted first.")
+        rows = [tag("UNKNOWN", "UNKNOWN  could not inspect the Windows drive"),
+                ""]
+        rows += para("The Windows volume could not be read (encrypted, "
+                     "missing, or unsupported filesystem). Autopilot and "
+                     "MDM enrollment cannot be checked. A manager must "
+                     "decide, or the drive must be unlocked / decrypted "
+                     "first.")
+        box("AUTOPILOT / MDM", rows, "yellow")
         return "UNKNOWN"
 
     state = analysis["state"]
 
     if state == "NONE":
-        print(" STATE: CLEAN — no on-disk evidence of Autopilot or MDM")
-        print()
-        print(" What we found:")
-        print("   Nothing. No Autopilot profile, no MDM enrollment key,")
-        print("   no Intune/SCCM agent, no Azure AD artifact on disk.")
-        print()
-        print(" What this CANNOT rule out:")
-        print("   A laptop whose hardware hash has been registered in a")
-        print("   customer's Intune/ABM portal but which has NEVER been")
-        print("   powered on leaves NO disk trace. Only the portal knows.")
-        print()
-        print(" Before resale: verify the serial number in the customer's")
-        print(" Intune / Apple Business Manager portal. If it shows the")
-        print(" device as 'registered' or 'assigned', do not sell it until")
-        print(" removed from the portal.")
+        rows = [tag("CLEAN", "CLEAN  no on-disk evidence of Autopilot or MDM"),
+                ""]
+        rows += para("Found: nothing. No Autopilot profile, no MDM "
+                     "enrollment key, no Intune/SCCM agent, no Azure AD "
+                     "artifact on disk.")
+        rows.append(None)
+        rows += para("This CANNOT rule out a laptop whose hardware hash is "
+                     "registered in a customer's Intune / Apple Business "
+                     "Manager portal but which has never been powered on. "
+                     "That leaves no disk trace. Only the portal knows.",
+                     ("yellow",))
+        rows.append("")
+        rows += para("Before resale: check the serial number in the "
+                     "customer's Intune / ABM portal. If it shows "
+                     "'registered' or 'assigned', do not sell it until it "
+                     "is removed from the portal.", ("bold",))
+        box("AUTOPILOT / MDM", rows, "green")
         return "CLEAN"
 
     if state == "PAST":
-        print(" STATE: PAST ENROLLMENT — leftover traces, no active keys")
-        print()
-        print(" What we found:")
+        rows = [tag("PAST", "PAST ENROLLMENT  leftover traces, no active keys"),
+                ""]
         for e in analysis["past"]:
-            print("   [PAST] %s" % e["description"])
-            print("          %s" % e["path"])
+            rows += item(paint("[PAST]", "yellow"), e["description"])
+            rows += para(e["path"], ("dim",), indent=7)
         for k in analysis["mdm"]:
-            print("   [PAST] %s" % k)
-        print()
-        print(" What this means:")
-        print("   This laptop was enrolled at some point. The active")
-        print("   enrollment is gone, but logs / keys remain. This is")
-        print("   usually a reimaged or unenrolled device.")
-        print()
-        print(" Before resale: verify the serial in the Intune / ABM")
-        print(" portal. It MAY still be hash-registered even though the")
-        print(" disk is clean.")
+            rows += item(paint("[PAST]", "yellow"), k)
+        rows.append(None)
+        rows += para("This laptop was enrolled at some point. The active "
+                     "enrollment is gone, but logs / keys remain. Usually "
+                     "a reimaged or unenrolled device.")
+        rows.append("")
+        rows += para("Before resale: check the serial in the Intune / ABM "
+                     "portal. It MAY still be hash-registered even though "
+                     "the disk is clean.", ("bold",))
+        box("AUTOPILOT / MDM", rows, "yellow")
         return "PAST"
 
     if state == "ACTIVE":
-        print(" STATE: ACTIVE ENROLLMENT — this laptop IS enrolled NOW")
-        print()
-        print(" What we found:")
+        rows = [tag("ACTIVE", "ACTIVE ENROLLMENT  this laptop IS enrolled NOW"),
+                ""]
         for e in analysis["active"]:
-            print("   [ACTIVE] %s" % e["description"])
-            print("            %s" % e["path"])
+            rows += item(paint("[ACTIVE]", "bold", "red"), e["description"])
+            rows += para(e["path"], ("dim",), indent=9)
             if e.get("profile"):
                 p = e["profile"]
                 if p.get("tenant_id"):
-                    print("            Tenant: %s" % p["tenant_id"])
+                    rows += para("Tenant: %s" % p["tenant_id"], indent=9)
                 if p.get("device_name"):
-                    print("            Device: %s" % p["device_name"])
+                    rows += para("Device: %s" % p["device_name"], indent=9)
                 if p.get("serial"):
-                    print("            Serial: %s" % p["serial"])
+                    rows += para("Serial: %s" % p["serial"], indent=9)
         for k in analysis["mdm"]:
-            print("   [ACTIVE] %s" % k)
-        print()
-        print(" What this means:")
-        print("   This laptop is under ACTIVE management by an MDM")
-        print("   provider. Wiping the disk does NOT remove the cloud")
-        print("   registration. The customer MUST remove it from their")
-        print("   Intune / ABM / SCCM portal.")
-        print()
-        print(" ACTION REQUIRED:")
-        print("   1. Contact the customer to remove this device from")
-        print("      their portal, OR")
-        print("   2. If you have portal access, remove it yourself.")
-        print("   3. Re-run this check on the same laptop to confirm.")
-        print()
-        print(" DO NOT WIPE until the portal shows this device as")
-        print(" removed or unassigned.")
+            rows += item(paint("[ACTIVE]", "bold", "red"), k)
+        rows.append(None)
+        rows += para("This laptop is under ACTIVE management by an MDM "
+                     "provider. Wiping the disk does NOT remove the cloud "
+                     "registration. The customer MUST remove it from their "
+                     "Intune / ABM / SCCM portal.")
+        rows.append("")
+        rows.append(paint("ACTION REQUIRED", "bold", "red"))
+        rows += item("1.", "Contact the customer to remove this device "
+                           "from their portal, OR", indent=1)
+        rows += item("2.", "If you have portal access, remove it "
+                           "yourself.", indent=1)
+        rows += item("3.", "Re-run this check on the same laptop to "
+                           "confirm.", indent=1)
+        rows.append("")
+        rows += para("DO NOT WIPE until the portal shows this device as "
+                     "removed or unassigned.", ("bold", "red"))
+        box("AUTOPILOT / MDM", rows, "red")
         return "BLOCKED"
 
     return "UNKNOWN"
 
 
+def cannot_box(encrypted, unreadable, cannot):
+    rows = []
+    for s in encrypted:
+        rows += item(paint(ICON["lock"], "yellow"),
+                     "Encrypted volume, cannot inspect: %s" % s)
+    for s in unreadable:
+        rows += item(paint(ICON["warn"], "yellow"),
+                     "Could not mount: %s" % s)
+    for s in cannot:
+        if s in encrypted or s in unreadable:
+            continue
+        rows += item(paint(ICON["warn"], "yellow"), s)
+    if rows:
+        box("COULD NOT CHECK", rows, "yellow")
+
+
+# =============================================================================
+# MAIN
+# =============================================================================
 def main():
+    global USE_COLOR
     ap = argparse.ArgumentParser(description="ITAD pre-wipe check")
     ap.add_argument("--job-id", default="")
     ap.add_argument("--asset-id", default="")
     ap.add_argument("--tech", default="")
     ap.add_argument("--json", default="")
     ap.add_argument("--verbose", action="store_true")
+    ap.add_argument("--no-color", action="store_true",
+                    help="Plain text, no colours")
     args = ap.parse_args()
+    if args.no_color:
+        USE_COLOR = False
 
     if hasattr(os, "geteuid") and os.geteuid() != 0:
-        print("Must run as root. Use: sudo python3 laptop_check.py ...")
+        print(paint("Must run as root. Use: sudo python3 laptop_check.py ...",
+                    "bold", "red"))
         sys.exit(3)
 
     if not args.json:
         args.json = _default_json_path()
 
+    title_banner("ITAD PRE-WIPE CHECK", "v%s   READ ONLY" % VERSION)
+    box("JOB", kv("Time", NOW.strftime("%Y-%m-%d  %H:%M:%S"))
+        + kv("Job ID", args.job_id or "-")
+        + kv("Asset ID", args.asset_id or "-")
+        + kv("Technician", args.tech or "-"), "blue")
+
+    rule("SCANNING")
+
+    st = Step("Detecting platform")
     platform = detect_platform()
+    st.ok(PLATFORM_LABEL.get(platform, platform))
+
+    st = Step("Reading device identity")
     ident = get_identity()
+    if ident["serial"] == "UNKNOWN":
+        st.warn("serial not found")
+    else:
+        st.ok("serial " + ident["serial"])
+
+    st = Step("Scanning internal drives")
     internal, parts, disk_notes = scan_disks()
+    if disk_notes:
+        st.warn(disk_notes[0])
+    elif not internal:
+        st.warn("no internal drives found")
+    else:
+        st.ok("%d drive(s), %d partition(s)" % (len(internal), len(parts)))
 
     tmp = tempfile.mkdtemp(prefix="itad_lc_")
     mounted = []
@@ -629,20 +972,31 @@ def main():
     mac_enrol = []
 
     try:
+        st = Step("Checking firmware for Absolute")
         fw_s, fw_w = check_firmware_absolute()
         abs_signs.extend(fw_s)
         warns.extend(fw_w)
+        if fw_s:
+            st.fail("%d sign(s) found" % len(fw_s))
+        elif fw_w:
+            st.warn("verify in BIOS")
+        else:
+            st.ok("nothing found")
 
         for i, p in enumerate(parts):
             dev, fs = p["path"], p["fstype"] or ""
+            st = Step("Inspecting %s" % dev)
             if fs in ENCRYPTED_FS:
                 encrypted.append("%s (%s)" % (dev, fs))
+                st.warn("encrypted (%s)" % fs)
                 continue
             if _has_bitlocker_sig(dev):
                 encrypted.append("%s (BitLocker signature)" % dev)
+                st.warn("encrypted (BitLocker)")
                 continue
             if _has_luks_sig(dev):
                 encrypted.append("%s (LUKS signature)" % dev)
+                st.warn("encrypted (LUKS)")
                 continue
 
             if platform == "pc":
@@ -657,14 +1011,17 @@ def main():
             else:
                 try_fs = {"ntfs", "ntfs3", "ext4", "btrfs", "xfs", "fat32"}
             if fs not in try_fs:
+                st.skip("not checked (fs=%s)" % (fs or "?"))
                 continue
 
             mnt = os.path.join(tmp, "p%d" % i)
             os.makedirs(mnt, exist_ok=True)
             if not mount_ro(dev, mnt, fs):
                 unreadable.append("%s (fs=%s)" % (dev, fs or "?"))
+                st.warn("could not mount")
                 continue
             mounted.append(mnt)
+            found = "mounted read-only, no OS found"
 
             if platform == "pc" and find_ci(mnt, "Windows/System32"):
                 win_roots.append(mnt)
@@ -677,14 +1034,18 @@ def main():
                     autopilot_analysis["state"] = "PAST"
                 for k in ("active", "past", "tenant", "mdm", "azure_ad"):
                     autopilot_analysis[k].extend(ap[k])
+                found = "Windows volume"
             elif platform == "mac":
                 if find_ci(mnt, "Library") or find_ci(mnt, "System/Library"):
                     mac_roots.append(mnt)
                     mac_parts.append(dev)
                     abs_signs.extend(check_mac_absolute(mnt))
                     mac_enrol.extend(check_mac_enrolment(mnt))
+                    found = "macOS volume"
             elif platform == "unknown":
                 abs_signs.extend(check_linux_absolute(mnt))
+                found = "mounted read-only"
+            st.ok(found)
     finally:
         for m in mounted:
             unmount(m)
@@ -756,62 +1117,24 @@ def main():
         except Exception as e:
             print("Could not save JSON: %s" % e)
 
-    line = "=" * 60
-    print(line)
-    print(" ITAD PRE-WIPE CHECK  v%s  (READ ONLY)" % VERSION)
-    print(line)
-    print(" Time        : %s" % report["time"])
-    print(" Job ID      : %s" % (args.job_id or "-"))
-    print(" Asset ID    : %s" % (args.asset_id or "-"))
-    print(" Technician  : %s" % (args.tech or "-"))
-    print(" Platform    : %s" % PLATFORM_LABEL.get(platform, platform))
-    print("-" * 60)
-    print(" Make        : %s" % (ident["manufacturer"] or "-"))
-    ml = ident["model"] or "-"
-    if ident["version"] and ident["version"] != ident["model"]:
-        ml += " " + ident["version"]
-    print(" Model       : %s" % ml)
-    print(" Serial      : %s" % ident["serial"])
-    print(" BIOS        : %s %s (%s)" % (ident["bios_vendor"],
-                                        ident["bios_version"],
-                                        ident["bios_date"]))
-    print(" Boot mode   : %s  SecureBoot: %s" % (ident["boot_mode"],
-                                               ident["secure_boot"]))
-    for d in internal:
-        print(" Drive       : %s  %s  %s GB" % (d["path"],
-                                               d["model"] or "-",
-                                               d["size_gb"]))
-    if not internal:
-        print(" Drive       : none found")
-    print("-" * 60)
-    print(" ABSOLUTE (firmware) : %s" % abs_result)
-    for s in abs_signs:
-        print("    - %s" % s)
-    for w in warns:
-        print("    (i) %s" % w)
+    rule("RESULTS")
+    device_box(platform, ident, internal)
+    absolute_box(abs_result, abs_signs, warns)
+    autopilot_box(autopilot_analysis, os_checked, ap_result)
+    cannot_box(encrypted, unreadable, cannot)
 
-    print_autopilot_section(autopilot_analysis, os_checked, platform)
-
-    for s in encrypted:
-        print("    - Encrypted volume, cannot inspect: %s" % s)
-    for s in unreadable:
-        print("    - Could not mount: %s" % s)
-    for s in cannot:
-        if s in encrypted or s in unreadable:
-            continue
-        print("    - %s" % s)
-
-    print("-" * 60)
-    print(" FINAL RESULT      : %s" % result)
     if result == "BLOCKED":
-        print(" DO NOT WIPE. Escalate.")
+        big_banner(["", "%s  %s" % (ICON["bad"], spaced("BLOCKED")),
+                    "DO NOT WIPE.  Escalate.", ""], "red")
     elif result == "CANNOT CHECK":
-        print(" DO NOT WIPE YET. Manager decision required.")
+        big_banner(["", "%s  %s" % (ICON["warn"], spaced("CANNOT CHECK")),
+                    "DO NOT WIPE YET.  Manager decision required.", ""],
+                   "yellow")
     else:
-        print(" OK to proceed to laptop_wipe.py.")
-    print(line)
+        big_banner(["", "%s  %s" % (ICON["ok"], spaced("CLEAR")),
+                    "OK to proceed to laptop_wipe.py", ""], "green")
     if args.json != "-":
-        print(" Saved: %s" % args.json)
+        print(paint(" Saved: %s" % args.json, "dim"))
 
     sys.exit(code)
 
