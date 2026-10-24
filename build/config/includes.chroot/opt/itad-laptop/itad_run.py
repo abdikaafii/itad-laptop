@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-itad_run.py - run the full ITAD pipeline in one go (v1.0.0)
+itad_run.py - run the full ITAD pipeline in one go (v1.0.1)
 
 Runs, in this order:
   1. laptop_check.py  (read-only)   -> laptop_check.json
@@ -37,12 +37,13 @@ def _run_tool(path, args):
     print(BANNER)
     print("RUN:", os.path.basename(path), " ".join(args))
     print(BANNER)
+    # Using subprocess.call ensures it waits and passes back the exact exit code
     return subprocess.call([sys.executable, path] + args)
 
 
 def _load(path):
     try:
-        with open(path) as f:
+        with open(path, 'r') as f:
             return json.load(f)
     except Exception:
         return None
@@ -51,7 +52,8 @@ def _load(path):
 def _verify_environment():
     for p in (CHECK, WIPE, TEST):
         if not os.path.isfile(p):
-            print("Missing tool:", p, file=sys.stderr)
+            print(f"ERROR: Missing tool: {p}", file=sys.stderr)
+            print("Make sure all .py files are in the same directory.", file=sys.stderr)
             sys.exit(1)
 
 
@@ -60,7 +62,8 @@ def main():
     ap.add_argument("--job-id", default="")
     ap.add_argument("--asset-id", default="")
     ap.add_argument("--tech", default="")
-    ap.add_argument("--out-dir", default="/tmp/itad-run")
+    # Changed default out-dir to home folder so it persists across reboots
+    ap.add_argument("--out-dir", default=os.path.expanduser("~/itad-reports"))
     ap.add_argument("--method", default="auto",
                     choices=["auto", "clear", "random", "dod",
                              "purge", "crypto", "discard"])
@@ -76,11 +79,21 @@ def main():
     args = ap.parse_args()
 
     if hasattr(os, "geteuid") and os.geteuid() != 0:
-        print("Must run as root", file=sys.stderr)
+        print("ERROR: Must run as root (sudo).", file=sys.stderr)
         sys.exit(3)
 
     _verify_environment()
-    os.makedirs(args.out_dir, exist_ok=True)
+    
+    # Ensure output directory exists and is writable
+    try:
+        os.makedirs(args.out_dir, exist_ok=True)
+        test_file = os.path.join(args.out_dir, ".write_test")
+        with open(test_file, 'w') as f:
+            f.write("test")
+        os.remove(test_file)
+    except Exception as e:
+        print(f"ERROR: Cannot write to output directory {args.out_dir}: {e}", file=sys.stderr)
+        sys.exit(1)
 
     check_json = os.path.join(args.out_dir, "laptop_check.json")
     wipe_json = os.path.join(args.out_dir, "laptop_wipe.json")
@@ -100,10 +113,11 @@ def main():
     rc1 = _run_tool(CHECK, common + ["--json", check_json])
     rep1 = _load(check_json) or {}
     result1 = rep1.get("result", "?")
+    
     if result1 == "BLOCKED" and not args.continue_on_blocked:
         print()
         print("STAGE 1 (check) reported BLOCKED — stopping.")
-        print("Review %s, then re-run with --continue-on-blocked." % check_json)
+        print(f"Review {check_json}, then re-run with --continue-on-blocked.")
         sys.exit(5)
 
     # Stage 2: wipe
@@ -136,16 +150,15 @@ def main():
     # Aggregate
     rep2 = _load(wipe_json) if not args.skip_wipe else {}
     rep3 = _load(test_json) if not args.skip_test else {}
+    
     print()
     print(BANNER)
     print("PIPELINE SUMMARY")
     print(BANNER)
-    print("  check  : exit %d  result=%s" % (rc1, result1))
-    print("  wipe   : exit %d  overall=%s"
-          % (rc2, (rep2 or {}).get("overall", "-")))
-    print("  test   : exit %d  overall=%s"
-          % (rc3, (rep3 or {}).get("overall", "-")))
-    print("  reports:", args.out_dir + "/")
+    print(f"  check  : exit {rc1}  result={result1}")
+    print(f"  wipe   : exit {rc2}  overall={(rep2 or {}).get('overall', '-')}")
+    print(f"  test   : exit {rc3}  overall={(rep3 or {}).get('overall', '-')}")
+    print(f"  reports saved in: {args.out_dir}/")
 
     codes = [rc1]
     if not args.skip_wipe:
