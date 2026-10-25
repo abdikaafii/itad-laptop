@@ -48,6 +48,7 @@ xterm
 python3
 python3-tk
 python3-reportlab
+python3-pil
 sudo
 util-linux
 x11-xserver-utils
