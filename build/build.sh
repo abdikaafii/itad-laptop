@@ -23,10 +23,7 @@ lb config \
   --memtest none \
   --iso-application "ITAD Laptop Tool" \
   --iso-volume "ITAD_LAPTOP" \
-  --bootappend-live "boot=live components quiet splash loglevel=0 systemd.show_status=false vt.global_cursor_default=0 plymouth.ignore-serial-consoles" \
-  --syslinux-timeout 1 \
-  --syslinux-prompt 0 \
-  --grub-timeout 0
+  --bootappend-live "boot=live components quiet splash loglevel=0 systemd.show_status=false vt.global_cursor_default=0 plymouth.ignore-serial-consoles"
 
 echo "== 2b. Package list =="
 mkdir -p "$CFG/package-lists"
