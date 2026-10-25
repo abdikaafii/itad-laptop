@@ -237,16 +237,6 @@ cat > "$OPENBOX_MENU" <<'EOF'
       <command>xterm -e sudo python3 /opt/itad-laptop/laptop_test.py</command>
     </action>
   </item>
-  <item label="Test Keyboard">
-    <action name="Execute">
-      <command>python3 /opt/itad-laptop/keyboard_test.py</command>
-    </action>
-  </item>
-  <item label="Test Screen (Colors)">
-    <action name="Execute">
-      <command>python3 /opt/itad-laptop/screen_test.py</command>
-    </action>
-  </item>
   <item label="Terminal">
     <action name="Execute">
       <command>xterm</command>
