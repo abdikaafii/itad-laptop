@@ -25,6 +25,17 @@ lb config \
   --iso-volume "ITAD_LAPTOP" \
   --bootappend-live "boot=live components quiet splash loglevel=0 systemd.show_status=false vt.global_cursor_default=0 plymouth.ignore-serial-consoles"
 
+echo "== 2b. Package list (programs installed into the ISO) =="
+mkdir -p "$CFG/package-lists"
+cat > "$CFG/package-lists/itad.list.chroot" <<'EOF'
+plymouth
+plymouth-themes
+xorg
+xinit
+openbox
+python3
+EOF
+
 echo "== 3. Boot splash theme (logo) =="
 THEME="$INC/usr/share/plymouth/themes/itad"
 mkdir -p "$THEME"
@@ -117,4 +128,3 @@ lb build
 ISO="$(ls -1 ./*.iso | head -n1)"
 mv "$ISO" itad-laptop.iso
 echo "Done: build/itad-laptop.iso"
-
