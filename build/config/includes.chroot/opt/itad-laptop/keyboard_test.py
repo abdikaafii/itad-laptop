@@ -22,9 +22,9 @@ class KeyboardTestApp:
         # Title
         title = tk.Label(root, text="KEYBOARD TEST", font=("Helvetica", 24, "bold"), 
                          bg="#1e1e1e", fg="#38bdf8")
-        title.pack(pady=20)
+        title.pack(pady=10)
 
-        subtitle = tk.Label(root, text="Press every key on the physical keyboard to test.", 
+        subtitle = tk.Label(root, text="Press every key. Press twice to confirm (Yellow -> Green).", 
                             font=("Helvetica", 14), bg="#1e1e1e", fg="#cccccc")
         subtitle.pack(pady=5)
 
@@ -43,38 +43,41 @@ class KeyboardTestApp:
         kb_frame.pack(expand=True)
 
         self.buttons = {}
+        self.key_states = {} # Tracks if key is unpressed (0), yellow (1), or green (2)
+
         for r, row in enumerate(KEYBOARD_LAYOUT):
             for c, key in enumerate(row):
                 btn = tk.Button(kb_frame, text=key, width=4, height=2, 
                                 bg="#333333", fg="white", font=("Helvetica", 10, "bold"),
-                                relief="raised")
+                                relief="raised", takefocus=0) # takefocus=0 prevents stealing Space/Enter
+                
                 # Adjust widths for special keys
-                if key in ["space"]: btn.config(width=20)
+                if key == "space": btn.config(width=20)
                 elif key in ["Shift_L", "Shift_R", "BackSpace", "CapsLock", "Return"]: btn.config(width=8)
                 elif key in ["Tab", "Control_L", "Alt_L", "Alt_R", "Control_R"]: btn.config(width=6)
                 
                 btn.grid(row=r, column=c, padx=3, pady=3, sticky="nsew")
                 self.buttons[key] = btn
+                self.key_states[key] = 0
 
         # Bottom Buttons
         btn_frame = tk.Frame(root, bg="#1e1e1e")
-        btn_frame.pack(pady=30)
+        btn_frame.pack(pady=20)
 
         tk.Button(btn_frame, text="FINISH TEST", font=("Helvetica", 14, "bold"),
-                  bg="#22c55e", fg="white", command=self.finish_test).pack(side=tk.LEFT, padx=20)
+                  bg="#22c55e", fg="white", command=self.finish_test, takefocus=0).pack(side=tk.LEFT, padx=20)
         
         tk.Button(btn_frame, text="FAIL / CANCEL", font=("Helvetica", 14, "bold"),
-                  bg="#ef4444", fg="white", command=self.cancel_test).pack(side=tk.LEFT, padx=20)
+                  bg="#ef4444", fg="white", command=self.cancel_test, takefocus=0).pack(side=tk.LEFT, padx=20)
 
         # Bind keypress events
         self.root.bind("<KeyPress>", self.key_press)
         self.root.focus_force()
 
     def key_press(self, event):
-        # Map Tkinter keysym to our layout keys
         key = event.keysym
         
-        # Standardize some key names
+        # Standardize key names to match our layout
         if key == "Escape": key = "Esc"
         elif key == "Return": key = "Return"
         elif key == "BackSpace": key = "BackSpace"
@@ -83,36 +86,45 @@ class KeyboardTestApp:
         # Handle uppercase letters (if Shift or CapsLock is on)
         if len(key) == 1 and key.isupper():
             key = key.lower()
-            # Simulate Shift press
-            if "Shift_L" in self.buttons: self.mark_passed("Shift_L")
+            if "Shift_L" in self.buttons: self.cycle_key("Shift_L")
 
-        # Check if this key exists in our layout
+        # If key exists in layout, cycle its state
         if key in self.buttons:
-            if key not in self.tested_keys:
-                self.tested_keys.add(key)
-                self.mark_passed(key)
-                self.update_progress()
+            self.cycle_key(key)
 
-    def mark_passed(self, key):
-        self.buttons[key].config(bg="#22c55e", activebackground="#22c55e", relief="sunken")
+    def cycle_key(self, key):
+        state = self.key_states[key]
+        btn = self.buttons[key]
+        
+        if state == 0:
+            # Unpressed -> Yellow (Pressed)
+            btn.config(bg="#eab308", activebackground="#eab308")
+            self.key_states[key] = 1
+        elif state == 1:
+            # Yellow -> Green (Confirmed)
+            btn.config(bg="#22c55e", activebackground="#22c55e")
+            self.key_states[key] = 2
+            self.tested_keys.add(key)
+            self.update_progress()
+        elif state == 2:
+            # Reset back to Gray (if they want to test again)
+            btn.config(bg="#333333", activebackground="#333333")
+            self.key_states[key] = 0
+            self.tested_keys.discard(key)
+            self.update_progress()
 
     def update_progress(self):
         count = len(self.tested_keys)
         self.progress_var.set(f"Progress: {count} / {self.total_keys}")
-        if count == self.total_keys:
-            messagebox.showinfo("Keyboard Test", "All keys passed successfully!")
-            self.finish_test()
 
     def finish_test(self):
         print("KEYBOARD_TEST: PASS")
         self.root.destroy()
-        # Exit with code 0 for pass
         raise SystemExit(0)
 
     def cancel_test(self):
         print("KEYBOARD_TEST: FAIL")
         self.root.destroy()
-        # Exit with code 1 for fail
         raise SystemExit(1)
 
 if __name__ == "__main__":
