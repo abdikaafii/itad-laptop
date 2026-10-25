@@ -1,16 +1,10 @@
 #!/usr/bin/env python3
 """
-laptop_check.py - ITAD pre-wipe check (v3.1.2)  MULTI-PLATFORM
+laptop_check.py - ITAD pre-wipe check (v3.1.3)  MULTI-PLATFORM
 READ ONLY. Never wipes or writes to any internal drive.
 
+v3.1.3: added CPU, RAM, and Chassis Type (Laptop/Desktop) detection.
 v3.1.2: updated default JSON path to match itad_run.py pipeline.
-v3.1.1: bug fixes over v3.1.0 (no change to check logic):
-  - --json - no longer pollutes stdout (human output goes to stderr)
-  - registry hives are streamed, not capped at 8 MB
-  - file handles closed properly
-  - --verbose now prints diagnostics
-  - variable shadowing and unused parameters removed
-  - PAST state now also lists Azure AD traces
 """
 import argparse, glob, fnmatch, json, os, re, shutil, subprocess, sys, tempfile
 import threading, time
@@ -22,7 +16,7 @@ try:
 except Exception:
     NOW = datetime.now()
 
-VERSION = "3.1.2"
+VERSION = "3.1.3"
 
 BAD_SERIALS = {
     "", "none", "default string", "to be filled by o.e.m.",
@@ -432,8 +426,6 @@ def read_bytes(p, n=None):
 
 
 def file_contains_any(path, needles, chunk=4 * 1024 * 1024):
-    """Stream a (potentially huge) file looking for any of `needles`.
-    Returns the subset of `needles` (original form) that were found."""
     if not needles:
         return set()
     found = set()
@@ -513,10 +505,49 @@ PLATFORM_LABEL = {
     "unknown": "Unknown / Linux",
 }
 
-
+# FIXED: Added CPU, RAM, and Device Type Detection
 def get_identity():
     d = "/sys/class/dmi/id/"
+    
+    # Chassis Type (Laptop/Desktop)
+    chassis_code = read_file(d + "chassis_type")
+    device_type = "Unknown"
+    if chassis_code in ["8", "9", "10", "14"]:
+        device_type = "Laptop/Notebook"
+    elif chassis_code in ["3", "4", "6", "7"]:
+        device_type = "Desktop"
+    elif chassis_code == "23":
+        device_type = "Server"
+    elif chassis_code == "30":
+        device_type = "Tablet"
+    
+    # CPU
+    cpu_model = "Unknown CPU"
+    try:
+        with open("/proc/cpuinfo", "r") as f:
+            for line in f:
+                if line.startswith("model name"):
+                    cpu_model = line.split(":", 1)[1].strip()
+                    break
+    except Exception:
+        pass
+        
+    # RAM
+    ram_gb = 0
+    try:
+        with open("/proc/meminfo", "r") as f:
+            for line in f:
+                if line.startswith("MemTotal:"):
+                    kb = int(line.split()[1])
+                    ram_gb = round(kb / 1024 / 1024, 1)
+                    break
+    except Exception:
+        pass
+
     info = {
+        "device_type": device_type,
+        "cpu": cpu_model,
+        "ram_gb": ram_gb,
         "manufacturer": read_file(d + "sys_vendor"),
         "model": read_file(d + "product_name"),
         "version": read_file(d + "product_version"),
@@ -810,18 +841,15 @@ def check_linux_absolute(root):
 
 
 def _default_json_path():
-    # 1. Try the ITAD_DATA environment variable (set by launch.sh for the USB stick)
     data_dir = os.environ.get("ITAD_DATA")
     if data_dir and os.path.isdir(data_dir) and os.access(data_dir, os.W_OK):
         return os.path.join(data_dir, "laptop_check.json")
 
-    # 2. Fallback to /tmp/itad-reports (standard live environment)
     fallback_dir = "/tmp/itad-reports"
     os.makedirs(fallback_dir, exist_ok=True)
     if os.access(fallback_dir, os.W_OK):
         return os.path.join(fallback_dir, "laptop_check.json")
 
-    # 3. Last resort: user's home directory
     default_dir = os.path.expanduser("~/itad-reports")
     os.makedirs(default_dir, exist_ok=True)
     return os.path.join(default_dir, "laptop_check.json")
@@ -830,15 +858,18 @@ def _default_json_path():
 # =============================================================================
 # SCREEN SECTIONS
 # =============================================================================
+# FIXED: Updated device_box to display CPU, RAM, and Type
 def device_box(platform, ident, internal):
     ml = ident["model"] or "-"
     if ident["version"] and ident["version"] != ident["model"]:
         ml += " " + ident["version"]
     rows = []
-    rows += kv("Platform", PLATFORM_LABEL.get(platform, platform))
+    rows += kv("Type", ident.get("device_type", "Unknown"), ("bold",))
     rows += kv("Make", ident["manufacturer"] or "-")
     rows += kv("Model", ml)
     rows += kv("Serial", ident["serial"], ("bold",))
+    rows += kv("CPU", ident.get("cpu", "-"))
+    rows += kv("RAM", f"{ident.get('ram_gb', 0)} GB")
     rows += kv("BIOS", "%s %s (%s)" % (ident["bios_vendor"],
                                        ident["bios_version"],
                                        ident["bios_date"]))
@@ -1001,16 +1032,15 @@ def main():
     if not args.json:
         args.json = _default_json_path()
 
-    # --json - : keep stdout clean for JSON; human output goes to stderr.
     json_stream = sys.stdout
     if args.json == "-":
         sys.stdout = sys.stderr
 
     title_banner("ITAD PRE-WIPE CHECK", "v%s   READ ONLY" % VERSION)
     box("JOB", kv("Time", NOW.strftime("%Y-%m-%d  %H:%M:%S"))
-        + kv("Job ID", args.job_id or "-")
-        + kv("Asset ID", args.asset_id or "-")
-        + kv("Technician", args.tech or "-"), "blue")
+        + kv("Job ID", args.job_id or "AUTO")
+        + kv("Asset ID", args.asset_id or "AUTO")
+        + kv("Technician", args.tech or "AUTO"), "blue")
 
     rule("SCANNING")
 
