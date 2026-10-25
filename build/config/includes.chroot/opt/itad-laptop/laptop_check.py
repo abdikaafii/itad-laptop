@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """
-laptop_check.py - ITAD pre-wipe check (v3.1.5)  MULTI-PLATFORM
+laptop_check.py - ITAD pre-wipe check (v3.1.6)  MULTI-PLATFORM
 READ ONLY. Never wipes or writes to any internal drive.
 
+v3.1.6: Unknown platform can no longer end as CLEAR when nothing was
+        inspected. Safer reading of the lsblk "removable" flag.
 v3.1.5: Empty folders no longer count as evidence (false-positive fix).
         Added "WHY IT IS BLOCKED" box under the banner and
         "block_reasons" in the JSON report.
@@ -20,7 +22,7 @@ try:
 except Exception:
     NOW = datetime.now()
 
-VERSION = "3.1.5"
+VERSION = "3.1.6"
 
 BAD_SERIALS = {
     "", "none", "default string", "to be filled by o.e.m.",
@@ -606,6 +608,11 @@ def _boot_parent_disk():
     return None
 
 
+def _truthy(v):
+    """lsblk gives true/false or "1"/"0" depending on version."""
+    return str(v).strip().lower() in ("1", "true")
+
+
 def _has_live_mount(node):
     mp = node.get("mountpoint") or ""
     if any(mp.startswith(p) for p in LIVE_MOUNT_PREFIXES):
@@ -634,7 +641,7 @@ def scan_disks():
             return True
         if disk.get("path") == boot:
             return True
-        if (disk.get("rm") or disk.get("tran") == "usb"):
+        if (_truthy(disk.get("rm")) or disk.get("tran") == "usb"):
             if int(disk.get("size") or 0) < 32_000_000_000:
                 return True
         return _has_live_mount(disk)
@@ -1218,6 +1225,8 @@ def main():
         cannot.append("No Windows volume could be inspected")
     if not internal:
         cannot.append("No internal drives detected")
+    if platform not in ("pc", "mac", "chromebook"):
+        cannot.append("Platform not recognised - nothing could be inspected")
 
     blocked = bool(abs_signs) or autopilot_analysis["state"] == "ACTIVE"
     if blocked:
@@ -1306,4 +1315,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
