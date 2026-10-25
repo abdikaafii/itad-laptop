@@ -69,6 +69,13 @@ except Exception:
 VERSION = "1.1.3"
 ALL_TESTS = ["cpu", "ram", "drive", "battery", "screen", "keyboard",
              "touchpad", "webcam", "speakers", "wifi", "usb"]
+# The component name each test puts in its result (used if a test crashes,
+# so the report still shows the right name).
+TEST_NAMES = {"cpu": "CPU", "ram": "RAM", "drive": "Drive Health",
+              "battery": "Battery", "screen": "Screen",
+              "keyboard": "Keyboard", "touchpad": "Touchpad",
+              "webcam": "Webcam", "speakers": "Speakers", "wifi": "Wi-Fi",
+              "usb": "USB"}
 
 # =============================================================================
 # LOOKS  --  colours, boxes, banners.  Display only, no checking logic here.
@@ -521,9 +528,17 @@ def test_cpu(load_seconds=30):
 
         rc, dmesg, _ = run(["dmesg"], timeout=5)
         if rc == 0:
-            throttles = [l for l in dmesg.splitlines()
-                         if "thermal" in l.lower()
-                         and "throttl" in l.lower()]
+            # Intel: "CPU0: Core temperature above threshold, cpu clock
+            # throttled". Other kernels/drivers: "thermal ... throttling".
+            throttles = []
+            for l in dmesg.splitlines():
+                low = l.lower()
+                if "temperature/speed normal" in low:
+                    continue
+                if ("clock throttled" in low
+                        or "temperature above threshold" in low
+                        or ("thermal" in low and "throttl" in low)):
+                    throttles.append(l)
             if throttles:
                 r["notes"].append("Thermal throttling events: %d"
                                   % len(throttles))
@@ -626,11 +641,27 @@ def test_drives():
             info["smart_error"] = "smartctl not installed"
         else:
             rc, out, err = run(["smartctl", "-a", "-j", path], timeout=30)
-            if rc == 0:
+            # smartctl's exit code is a set of bits. Bits 0-1 mean it could
+            # not read the drive at all. The other bits still come with good
+            # data: bit 3 = drive says it is FAILING, bit 4 = pre-fail
+            # attribute at threshold, bit 6 = old errors in the error log.
+            info["smartctl_rc"] = rc
+            data = None
+            if rc != 124 and not (rc & 3):
                 try:
                     data = json.loads(out)
+                except Exception as e:
+                    info["smart_error"] = str(e)[:80]
+            if data is not None:
+                try:
                     info["healthy"] = data.get(
                         "smart_status", {}).get("passed")
+                    if rc & 8:
+                        info["healthy"] = False
+                    if rc & 16:
+                        info["prefail_at_threshold"] = True
+                    if rc & 64:
+                        info["error_log_has_errors"] = True
                     nv = data.get("nvme_smart_health_information_log")
                     if nv:
                         info["percentage_used"] = nv.get("percentage_used")
@@ -646,14 +677,27 @@ def test_drives():
                                 info[k] = attrs[k]["raw"]["value"]
                 except Exception as e:
                     info["smart_error"] = str(e)[:80]
-            else:
+            elif not info.get("smart_error"):
                 # Normalise to a single-line string.
                 info["smart_error"] = " ".join(
-                    (err or out).strip().splitlines()[:2])
+                    (err or out).strip().splitlines()[:2]) or (
+                    "smartctl exit code %d" % rc)
 
         if info.get("healthy") is False:
             r["notes"].append("%s: SMART health FAILED" % path)
             r["status"] = "FAIL"
+        elif info.get("healthy") is None:
+            r["notes"].append("%s: SMART health could not be read" % path)
+            if r["status"] == "PASS":
+                r["status"] = "WARN"
+        if info.get("prefail_at_threshold"):
+            r["notes"].append("%s: a pre-fail SMART value is at its limit"
+                              % path)
+            if r["status"] == "PASS":
+                r["status"] = "WARN"
+        if info.get("error_log_has_errors"):
+            r["notes"].append("%s: old errors in the drive's error log "
+                              "(for information)" % path)
         if info.get("percentage_used") and info["percentage_used"] > 90:
             r["notes"].append("%s: SSD wear %d%%"
                               % (path, info["percentage_used"]))
@@ -718,13 +762,18 @@ def test_battery():
         for k in ("status", "capacity", "cycle_count", "manufacturer",
                   "model_name", "serial_number", "technology"):
             b[k] = read_file("%s/%s" % (bp, k))
-        design = (read_file(bp + "/energy_full_design")
-                  or read_file(bp + "/charge_full_design"))
-        full = (read_file(bp + "/energy_full")
-                or read_file(bp + "/charge_full"))
+        # energy_* is in micro-watt-hours, charge_* in micro-amp-hours.
+        unit = "mWh"
+        design = read_file(bp + "/energy_full_design")
+        full = read_file(bp + "/energy_full")
+        if not (design and full):
+            design = read_file(bp + "/charge_full_design")
+            full = read_file(bp + "/charge_full")
+            unit = "mAh"
         try:
             di, fi = int(design), int(full)
             health = round(fi / di * 100, 1)
+            b["unit"] = unit
             b["design_mwh"] = di / 1000
             b["full_mwh"] = fi / 1000
             b["health_pct"] = health
@@ -742,8 +791,9 @@ def test_battery():
             print("  %s %s %s" % (os.path.basename(bp).ljust(6),
                                   bar(health / 100.0, 30, hc),
                                   paint("%.1f%% health" % health, "bold", hc)))
-            say("       %.0f of %.0f mWh design   cycles: %s"
-                % (b["full_mwh"], b["design_mwh"], b["cycle_count"] or "?"),
+            say("       %.0f of %.0f %s design   cycles: %s"
+                % (b["full_mwh"], b["design_mwh"], unit,
+                   b["cycle_count"] or "?"),
                 ("dim",))
         except Exception:
             say("%s: health data unavailable" % bp, ("yellow",))
@@ -1117,6 +1167,23 @@ def test_webcam():
 # =============================================================================
 # Speakers
 # =============================================================================
+def unmute_audio():
+    """A fresh live boot often starts muted or at 0%. Turn the main
+    controls up and unmute them on every sound card, so a working speaker
+    is not marked as failed. Returns the controls that were set."""
+    done = []
+    if not shutil.which("amixer"):
+        return done
+    cards = re.findall(r"^\s*(\d+)\s*\[", read_file("/proc/asound/cards"), re.M)
+    for c in cards or ["0"]:
+        for ctl in ("Master", "Speaker", "PCM", "Front"):
+            rc, _, _ = run(["amixer", "-q", "-c", c, "sset", ctl, "80%",
+                            "unmute"], timeout=5)
+            if rc == 0:
+                done.append("card %s %s" % (c, ctl))
+    return done
+
+
 def test_speakers(interactive):
     _banner("speakers")
     r = {"component": "Speakers", "status": "SKIP",
@@ -1146,6 +1213,7 @@ def test_speakers(interactive):
         _done(r, "card present")
         return r
 
+    r["details"]["unmuted"] = unmute_audio()
     say("Playing a short tone — listen for clear sound from both speakers...")
     rc, out, err = run(["speaker-test", "-t", "sine", "-f", "440",
                         "-l", "1", "-c", "2"], timeout=10)
@@ -1394,12 +1462,14 @@ def main():
             results.append(dispatcher[t]())
         except KeyboardInterrupt:
             clear_progress()
-            results.append({"component": t.upper(), "status": "SKIP",
+            results.append({"component": TEST_NAMES.get(t, t.upper()),
+                            "status": "SKIP",
                             "details": {},
                             "notes": ["Aborted by technician"]})
             break
         except Exception as e:
-            results.append({"component": t.upper(), "status": "WARN",
+            results.append({"component": TEST_NAMES.get(t, t.upper()),
+                            "status": "WARN",
                             "details": {},
                             "notes": ["Test crashed: %s" % str(e)[:120]]})
 
