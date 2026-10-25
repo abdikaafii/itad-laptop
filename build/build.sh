@@ -98,8 +98,14 @@ cat > "$AUTOSTART_DIR/autostart" <<'EOF'
 EOF
 chmod +x "$AUTOSTART_DIR/autostart"
 
-echo "== 4c. Auto-start Xorg on tty1 login =="
-# Using /etc/skel ensures the live user gets these files automatically on boot
+echo "== 4c. Hide Debian text and Auto-start Xorg on tty1 login =="
+# 1. Clear the Debian welcome messages
+mkdir -p "$INC/etc"
+: > "$INC/etc/issue"
+: > "$INC/etc/issue.net"
+: > "$INC/etc/motd"
+
+# 2. Setup /etc/skel so the live user gets these files automatically
 SKEL_DIR="$INC/etc/skel"
 mkdir -p "$SKEL_DIR"
 
@@ -110,10 +116,11 @@ exec openbox-session
 EOF
 chmod +x "$SKEL_DIR/.xinitrc"
 
-# Auto-run startx on tty1 login via bash_profile
+# Auto-run startx on tty1 login, clearing the screen and silencing output
 cat > "$SKEL_DIR/.bash_profile" <<'EOF'
 if [ -z "$DISPLAY" ] && [ "$(tty)" = "/dev/tty1" ]; then
-    exec startx
+    clear
+    exec startx > /dev/null 2>&1
 fi
 EOF
 
@@ -143,7 +150,6 @@ cat > "$OPENBOX_MENU" <<'EOF'
 EOF
 
 echo "== 4e. Fix permissions for the ITAD tool =="
-# Ensure the scripts uploaded to GitHub are executable inside the ISO
 chmod +x "$INC/opt/itad-laptop/launch.sh" 2>/dev/null || true
 chmod +x "$INC/opt/itad-laptop/"*.py 2>/dev/null || true
 
