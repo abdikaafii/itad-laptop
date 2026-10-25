@@ -810,12 +810,21 @@ def check_linux_absolute(root):
 
 
 def _default_json_path():
-    # Updated to use the persistent home directory
-    default = os.path.expanduser("~/itad-reports/laptop_check.json")
-    for c in ("/run/live/medium", "/cdrom", "/media/usb", "/mnt/usb"):
-        if os.path.isdir(c) and os.access(c, os.W_OK):
-            return os.path.join(c, "laptop_check.json")
-    return default
+    # 1. Try the ITAD_DATA environment variable (set by launch.sh for the USB stick)
+    data_dir = os.environ.get("ITAD_DATA")
+    if data_dir and os.path.isdir(data_dir) and os.access(data_dir, os.W_OK):
+        return os.path.join(data_dir, "laptop_check.json")
+
+    # 2. Fallback to /tmp/itad-reports (standard live environment)
+    fallback_dir = "/tmp/itad-reports"
+    os.makedirs(fallback_dir, exist_ok=True)
+    if os.access(fallback_dir, os.W_OK):
+        return os.path.join(fallback_dir, "laptop_check.json")
+
+    # 3. Last resort: user's home directory
+    default_dir = os.path.expanduser("~/itad-reports")
+    os.makedirs(default_dir, exist_ok=True)
+    return os.path.join(default_dir, "laptop_check.json")
 
 
 # =============================================================================
