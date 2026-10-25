@@ -44,6 +44,7 @@ unclutter
 ntfs-3g
 alsa-utils
 network-manager
+smartmontools
 EOF
 
 echo "== 3. Boot splash theme =="
