@@ -1,9 +1,16 @@
 #!/usr/bin/env python3
 """
-laptop_test.py - ITAD component test (v1.1.2)  READ-MOSTLY
+laptop_test.py - ITAD component test (v1.1.3)  READ-MOSTLY
 
 Step 2 of the ITAD pipeline. Runs AFTER laptop_check.py and the wipe.
 
+v1.1.3: fixes found while checking it against laptop_window.py:
+  - RAM: memtester stopped at the time limit was marked FAIL. Now it is
+    PASS ("no errors found") unless memtester really reported a failure.
+    "could not start" (exit 1) is a WARN, not a FAIL.
+  - Drive: every USB-connected drive is skipped (the boot stick is not a
+    laptop drive, whatever its size).
+  - Wi-Fi: unblocks Wi-Fi (rfkill) before scanning.
 v1.1.2: updated default JSON path to match itad_run.py pipeline.
 v1.1.1: bug fixes over v1.1.0 (no change to test logic):
   - --json - no longer pollutes stdout (human output goes to stderr)
@@ -59,7 +66,7 @@ try:
 except Exception:
     NOW = datetime.now()
 
-VERSION = "1.1.2"
+VERSION = "1.1.3"
 ALL_TESTS = ["cpu", "ram", "drive", "battery", "screen", "keyboard",
              "touchpad", "webcam", "speakers", "wifi", "usb"]
 
@@ -303,7 +310,9 @@ def scan_internal_disks():
             continue
         if (d.get("name") or "").startswith(("loop", "sr", "zram", "ram", "dm-")):
             continue
-        if d.get("tran") == "usb" and int(d.get("size") or 0) < 32_000_000_000:
+        # Any USB-connected drive is the boot stick or an external drive,
+        # not the laptop's own drive: skip it whatever its size.
+        if d.get("tran") == "usb":
             continue
         disks.append({
             "path": d.get("path"),
@@ -568,13 +577,25 @@ def test_ram(minutes=2):
         rc, out, err = run_with_bar(
             cmd, limit, "memtester", limit,
             lambda el: "%d:%02d of max %d:00" % (el // 60, el % 60, minutes))
+        text = out + err
         r["details"]["memtester"] = {
             "size_mb": test_mb, "rc": rc,
-            "tail": (out + err).strip().splitlines()[-3:],
+            "tail": text.strip().splitlines()[-3:],
         }
-        if rc != 0 or "FAILURE" in (out + err):
+        # memtester exit codes: 0 = all good, 1 = could not start (memory
+        # lock / allocation), 2 = stuck address, 4 = a test failed.
+        # 124 = our own time limit stopped it (this is NOT a failure).
+        if "FAILURE" in text or (rc not in (0, 1, 124) and (rc & 6)):
             r["status"] = "FAIL"
-            r["notes"].append("memtester failed (rc=%d)" % rc)
+            r["notes"].append("memtester found memory errors (rc=%d)" % rc)
+        elif rc == 124:
+            r["notes"].append(
+                "memtester ran %d min, no errors found (stopped at the "
+                "time limit)" % minutes)
+        elif rc != 0:
+            r["notes"].append("memtester could not run (rc=%d)" % rc)
+            if r["status"] == "PASS":
+                r["status"] = "WARN"
     elif minutes > 0:
         r["notes"].append("memtester not installed — skipped stress test")
         if r["status"] == "PASS":
@@ -1154,11 +1175,17 @@ def test_wifi():
     r = {"component": "Wi-Fi", "status": "SKIP",
          "details": {}, "notes": []}
 
+    # A soft-blocked Wi-Fi card is invisible to the scan: unblock it first.
+    if shutil.which("rfkill"):
+        run(["rfkill", "unblock", "wifi"], timeout=5)
+        time.sleep(1)
+
     rc, out, _ = run(["ip", "-o", "link", "show"])
     ifaces = re.findall(r"^\d+:\s+(\w+):", out, re.M)
     wlans = [i for i in ifaces if i.startswith(("wl", "wlan"))]
     if not wlans:
-        r["notes"].append("No Wi-Fi interface (desktop / disabled in BIOS)")
+        r["notes"].append("No Wi-Fi interface (desktop / disabled in BIOS "
+                          "/ missing firmware)")
         _done(r, "no interface")
         return r
     r["details"]["interfaces"] = wlans
