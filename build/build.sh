@@ -44,7 +44,6 @@ unclutter
 ntfs-3g
 alsa-utils
 network-manager
-smartmontools
 EOF
 
 echo "== 3. Boot splash theme =="
@@ -100,7 +99,7 @@ mkdir -p "$AUTOSTART_DIR"
 cat > "$AUTOSTART_DIR/autostart" <<'EOF'
 #!/bin/bash
 # Start the ITAD GUI Tool automatically when the desktop loads.
-python3 /opt/itad-laptop/laptop_test.py &
+python3 /opt/itad-laptop/laptop_window.py &
 EOF
 chmod +x "$AUTOSTART_DIR/autostart"
 
@@ -135,7 +134,7 @@ cat > "$OPENBOX_MENU" <<'EOF'
 <menu id="root-menu" label="Openbox 3">
   <item label="Launch ITAD GUI (LaptopSeal)">
     <action name="Execute">
-      <command>python3 /opt/itad-laptop/laptop_test.py</command>
+      <command>python3 /opt/itad-laptop/laptop_window.py</command>
     </action>
   </item>
   <item label="Launch ITAD Terminal Pipeline">
@@ -196,9 +195,10 @@ echo "== 4f. Hide Boot Menus (Syslinux & GRUB) =="
 SYS_CFG_DIR="$CFG/bootloaders/isolinux"
 mkdir -p "$SYS_CFG_DIR"
 
-# FIXED: Generate an 8-bit indexed color PNG with 16 colors for Syslinux compatibility
-convert -size 640x480 xc:black -type Palette -colors 16 -depth 8 "$SYS_CFG_DIR/splash.png"
-convert -size 800x600 xc:black -type Palette -colors 16 -depth 8 "$SYS_CFG_DIR/splash800x600.png"
+# Replace the blue Debian splash images with solid black ones
+convert -size 640x480 xc:black "$SYS_CFG_DIR/splash.png"
+convert -size 800x600 xc:black "$SYS_CFG_DIR/splash800x600.png"
+convert -size 1024x768 xc:black "$SYS_CFG_DIR/splash1024x768.png"
 
 # Bypass the graphical menu entirely and boot the default live entry instantly
 cat > "$SYS_CFG_DIR/isolinux.cfg" <<'EOF'
