@@ -36,6 +36,7 @@ openbox
 xterm
 python3
 python3-tk
+python3-reportlab
 sudo
 util-linux
 x11-xserver-utils
@@ -91,14 +92,14 @@ update-alternatives --set default.plymouth \
 EOF
 chmod +x "$HOOKS/0100-set-plymouth-theme.chroot"
 
-echo "== 4b. Setup auto-start for the ITAD tool (Openbox) =="
+echo "== 4b. Setup auto-start for the ITAD GUI =="
 AUTOSTART_DIR="$INC/etc/xdg/openbox"
 mkdir -p "$AUTOSTART_DIR"
 
 cat > "$AUTOSTART_DIR/autostart" <<'EOF'
 #!/bin/bash
-# Start the ITAD Laptop Tool automatically when the GUI loads.
-/opt/itad-laptop/launch.sh &
+# Start the ITAD GUI Tool automatically when the desktop loads.
+python3 /opt/itad-laptop/laptop_test.py &
 EOF
 chmod +x "$AUTOSTART_DIR/autostart"
 
@@ -131,7 +132,12 @@ cat > "$OPENBOX_MENU" <<'EOF'
 <?xml version="1.0" encoding="UTF-8"?>
 <openbox_menu xmlns="http://openbox.org/3.4/menu">
 <menu id="root-menu" label="Openbox 3">
-  <item label="Launch ITAD Wipe Pipeline">
+  <item label="Launch ITAD GUI (LaptopSeal)">
+    <action name="Execute">
+      <command>python3 /opt/itad-laptop/laptop_test.py</command>
+    </action>
+  </item>
+  <item label="Launch ITAD Terminal Pipeline">
     <action name="Execute">
       <command>/opt/itad-laptop/launch.sh</command>
     </action>
@@ -181,7 +187,7 @@ cat > "$OPENBOX_MENU" <<'EOF'
 EOF
 
 echo "== 4e. Fix permissions for the ITAD tool =="
-chmod +x "$INC/opt/itad-laptop/launch.sh" 2>/dev/null || true
+chmod +x "$INC/opt/itad-laptop/"*.sh 2>/dev/null || true
 chmod +x "$INC/opt/itad-laptop/"*.py 2>/dev/null || true
 
 echo "== 4f. Hide Boot Menus (Syslinux & GRUB) =="
