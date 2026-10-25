@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """
-laptop_check.py - ITAD pre-wipe check (v3.1.3)  MULTI-PLATFORM
+laptop_check.py - ITAD pre-wipe check (v3.1.4)  MULTI-PLATFORM
 READ ONLY. Never wipes or writes to any internal drive.
 
+v3.1.4: Added SSD/HDD detection and clearer storage display.
 v3.1.3: added CPU, RAM, and Chassis Type (Laptop/Desktop) detection.
 v3.1.2: updated default JSON path to match itad_run.py pipeline.
 """
@@ -16,7 +17,7 @@ try:
 except Exception:
     NOW = datetime.now()
 
-VERSION = "3.1.3"
+VERSION = "3.1.4"
 
 BAD_SERIALS = {
     "", "none", "default string", "to be filled by o.e.m.",
@@ -505,11 +506,10 @@ PLATFORM_LABEL = {
     "unknown": "Unknown / Linux",
 }
 
-# FIXED: Added CPU, RAM, and Device Type Detection
+
 def get_identity():
     d = "/sys/class/dmi/id/"
     
-    # Chassis Type (Laptop/Desktop)
     chassis_code = read_file(d + "chassis_type")
     device_type = "Unknown"
     if chassis_code in ["8", "9", "10", "14"]:
@@ -521,7 +521,6 @@ def get_identity():
     elif chassis_code == "30":
         device_type = "Tablet"
     
-    # CPU
     cpu_model = "Unknown CPU"
     try:
         with open("/proc/cpuinfo", "r") as f:
@@ -532,7 +531,6 @@ def get_identity():
     except Exception:
         pass
         
-    # RAM
     ram_gb = 0
     try:
         with open("/proc/meminfo", "r") as f:
@@ -605,8 +603,9 @@ def _has_live_mount(node):
 
 
 def scan_disks():
+    # Added ROTA to detect SSD vs HDD
     rc, out, _ = run(["lsblk", "-J", "-b", "-o",
-                      "NAME,PATH,TYPE,FSTYPE,SIZE,RM,TRAN,MODEL,MOUNTPOINT"])
+                      "NAME,PATH,TYPE,FSTYPE,SIZE,RM,TRAN,MODEL,MOUNTPOINT,ROTA"])
     internal, parts, notes = [], [], []
     if rc != 0:
         notes.append("lsblk failed")
@@ -641,11 +640,17 @@ def scan_disks():
     for disk in data.get("blockdevices", []):
         if disk.get("type") != "disk" or _skip(disk):
             continue
+        
+        # Determine if it is HDD (1) or SSD (0)
+        rota = int(disk.get("rota", 1))
+        drive_type = "HDD" if rota == 1 else "SSD"
+
         internal.append({
             "path": disk.get("path"),
             "model": (disk.get("model") or "").strip(),
             "size_gb": round(int(disk.get("size") or 0) / 1e9, 1),
             "tran": disk.get("tran") or "",
+            "drive_type": drive_type
         })
         if disk.get("fstype"):
             parts.append({"path": disk.get("path"),
@@ -858,7 +863,6 @@ def _default_json_path():
 # =============================================================================
 # SCREEN SECTIONS
 # =============================================================================
-# FIXED: Updated device_box to display CPU, RAM, and Type
 def device_box(platform, ident, internal):
     ml = ident["model"] or "-"
     if ident["version"] and ident["version"] != ident["model"]:
@@ -870,17 +874,20 @@ def device_box(platform, ident, internal):
     rows += kv("Serial", ident["serial"], ("bold",))
     rows += kv("CPU", ident.get("cpu", "-"))
     rows += kv("RAM", f"{ident.get('ram_gb', 0)} GB")
+    
+    # UPDATED: Clear storage display with SSD/HDD type
+    if internal:
+        for d in internal:
+            drive_desc = f"{d.get('model') or 'Unknown'} ({d.get('drive_type', 'Drive')}) - {d.get('size_gb', 0)} GB"
+            rows += kv("Storage", drive_desc)
+    else:
+        rows += kv("Storage", "none found", ("yellow",))
+        
     rows += kv("BIOS", "%s %s (%s)" % (ident["bios_vendor"],
                                        ident["bios_version"],
                                        ident["bios_date"]))
     rows += kv("Boot mode", "%s   SecureBoot: %s" % (ident["boot_mode"],
                                                      ident["secure_boot"]))
-    if internal:
-        for d in internal:
-            rows += kv("Drive", "%s  %s  %s GB" % (
-                d["path"], d["model"] or "-", d["size_gb"]))
-    else:
-        rows += kv("Drive", "none found", ("yellow",))
     box("DEVICE", rows, "cyan")
 
 
