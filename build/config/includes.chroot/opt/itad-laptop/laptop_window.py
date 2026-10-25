@@ -1,17 +1,19 @@
 #!/usr/bin/env python3
 """
-laptop_window.py - LaptopSeal window (v1.1.0)
+laptop_window.py - ITAD Laptop window (v1.2.0)
 This is the GRAPHICAL USER INTERFACE (GUI).
 
+v1.2.0
+  - New look: dark blue design with a left menu (Home, New Job, Settings,
+    About, Shutdown), a Home screen, and the 5 stages shown at the bottom
+    of every screen: Check > Wiping > Testing > Observations > Reporting.
+  - New Observations screen: cosmetic grade, issues, notes and photos.
+    These go into the TXT and PDF report (photos are added to the PDF).
+  - Optional picture on the Home screen: put hero.png in the tools folder.
 v1.1.0
-  - New "Sign in" screen: technician name + password.
-    Passwords are never stored. Only a salted PBKDF2-SHA256 hash is
-    saved in technicians.txt (on the ITAD_DATA stick when it is plugged in).
-  - "Add technician" button on the sign-in screen.
-  - Hardware card shows the real RAM size (from the RAM modules, not the
-    smaller number Linux reports), RAM type, speed and slots used.
-  - Hardware card and report show the screen size in inches and the
-    resolution (read from the built-in screen's EDID).
+  - Technician sign in with password (stored only as a salted
+    PBKDF2-SHA256 hash in technicians.txt).
+  - Real RAM size, type, speed and slots. Screen size and resolution.
 """
 import argparse
 import glob
@@ -37,7 +39,7 @@ try:
 except Exception:
     TZ = None
 
-VERSION = "1.1.0"
+VERSION = "1.2.0"
 TOOLS_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # --- THESE ARE THE FILES THIS GUI WILL RUN ---
@@ -46,15 +48,34 @@ WIPE = os.path.join(TOOLS_DIR, "laptop_wipe.py")      # The disk wiper
 HW_TEST = os.path.join(TOOLS_DIR, "laptop_test.py")   # The automated CPU/RAM test
 PY = sys.executable
 
-# Colours: same family as the SwitchSeal window
-NAVY, PANEL, DEEP, BORDER = "#0B1F3A", "#102A4D", "#08172C", "#23406B"
-BLUE, CYAN, TEXT, MUTED = "#1E6FE0", "#22C7E8", "#E8F1FF", "#9BB2D1"
-OK, BAD, WARN = "#3DDC97", "#FF8A8A", "#FFC857"
+# Colours (dark blue ITAD design)
+BG, BG2, SIDE = "#050F22", "#081831", "#061430"
+NAVY, CARD2 = "#0A1D3C", "#0B1F40"          # NAVY = card background
+PANEL = BG                                  # page background
+BORDER, BORDER_HI = "#1A3966", "#2B5FA8"
+BLUE, BLUE2, CYAN = "#1E7BFF", "#2E9BFF", "#38BDF8"
+TEXT, MUTED = "#EAF2FF", "#8EA6C8"
+OK, BAD, WARN = "#34D399", "#F87171", "#FBBF24"
 RED_BAN, GREEN_BAN = "#C62F2F", "#1FA971"
 FONT = "DejaVu Sans"
 
 ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]|\x1b\([A-Z0-9]")
-STEPS = ["1  Sign in", "2  Job", "3  Checks", "4  Wipe & Tests", "5  Report"]
+# The 5 stages at the bottom of the screen (in the real order of work)
+STAGES = [("check", "Check", "Absolute lock and enrolment", "search",
+           "#3B9BFF"),
+          ("wipe", "Wiping", "Secure data erasure", "bin", "#F5B83D"),
+          ("test", "Testing", "Run functional tests", "chip", "#2DD4BF"),
+          ("obs", "Observations", "Record issues and photos", "clipboard",
+           "#A78BFA"),
+          ("report", "Reporting", "Generate final report", "doc",
+           "#4F8BFF")]
+GRADES = [("A", "Like new"), ("B", "Light wear"), ("C", "Heavy wear"),
+          ("D", "Damaged / for parts")]
+ISSUES = ["Scratches on lid or base", "Dents", "Screen scratches",
+          "Screen damage / dead pixels", "Missing or worn keys",
+          "Broken hinge", "Cracked or damaged case", "Swollen battery",
+          "Missing parts (screws, feet, covers)", "Stickers or engraving",
+          "Liquid damage signs", "No charger"]
 TECH_FILE = "technicians.txt"
 PBKDF_ITER = 200000
 MIN_PASSWORD = 6
@@ -505,10 +526,20 @@ def compute_overall(wipe_state, wipe_overall, tests):
     return "PASS", []
 
 
+def obs_lines(obs):
+    obs = obs or {}
+    out = [("Cosmetic grade", obs.get("grade") or "-"),
+           ("Issues", ", ".join(obs.get("issues") or []) or "none"),
+           ("Notes", (obs.get("notes") or "").strip() or "-"),
+           ("Photos", ", ".join(os.path.basename(p) for p in
+                                (obs.get("photo_files") or [])) or "none")]
+    return out
+
+
 def render_txt(rep):
     L = []
     add = L.append
-    add("LAPTOPSEAL  ITAD REPORT")
+    add("ITAD LAPTOP REPORT")
     add("RESULT: %s" % rep["overall"])
     for r in rep["reasons"]:
         add("  - %s" % r)
@@ -537,7 +568,11 @@ def render_txt(rep):
         note = "; ".join(t.get("notes") or [])
         add("%-14s %-6s %s" % (t.get("component"), t.get("status"), note))
     add("")
-    add("Tool: LaptopSeal window v%s" % VERSION)
+    add("OBSERVATIONS")
+    for k, v in obs_lines(rep.get("observations")):
+        add("%-14s: %s" % (k, v))
+    add("")
+    add("Tool: ITAD Laptop window v%s" % VERSION)
     return "\n".join(L) + "\n"
 
 
@@ -549,14 +584,14 @@ def write_pdf(path, rep):
                                     Table, TableStyle)
     st = getSampleStyleSheet()
     col = {"PASS": "#1FA971", "FAIL": "#C62F2F"}.get(rep["overall"], "#B8860B")
-    doc = SimpleDocTemplate(path, pagesize=A4, title="LaptopSeal ITAD report")
-    el = [Paragraph("LaptopSeal - ITAD report", st["Title"]),
+    doc = SimpleDocTemplate(path, pagesize=A4, title="ITAD Laptop report")
+    el = [Paragraph("ITAD Laptop - test and wipe report", st["Title"]),
           Paragraph('<font color="%s"><b>RESULT: %s</b></font>'
                     % (col, rep["overall"]), st["Heading2"])]
     for r in rep["reasons"]:
         el.append(Paragraph("- %s" % r, st["Normal"]))
     el.append(Spacer(1, 10))
-    rows = [[k, v or "-"] for k, v in (
+    rows = [[k, Paragraph(str(v or "-"), st["Normal"])] for k, v in (
         ("Job ID", rep["job_id"]), ("Asset ID", rep["asset_id"]),
         ("Serial", rep["serial"]), ("Technician", rep["technician"]),
         ("Location", rep["location"]), ("Date/time", rep["time"]),
@@ -567,7 +602,8 @@ def write_pdf(path, rep):
         ("Wipe", rep["wipe_state"]))]
     t = Table(rows, colWidths=[110, 380])
     t.setStyle(TableStyle([("GRID", (0, 0), (-1, -1), 0.3, colors.grey),
-                           ("FONTSIZE", (0, 0), (-1, -1), 9)]))
+                           ("FONTSIZE", (0, 0), (-1, -1), 9),
+                           ("VALIGN", (0, 0), (-1, -1), "TOP")]))
     el += [t, Spacer(1, 12), Paragraph("Components", st["Heading3"])]
     rows = [["Component", "Status", "Notes"]]
     for x in rep["tests"]:
@@ -579,6 +615,28 @@ def write_pdf(path, rep):
                             ("BACKGROUND", (0, 0), (-1, 0), colors.lightgrey),
                             ("FONTSIZE", (0, 0), (-1, -1), 9)]))
     el.append(t2)
+    el += [Spacer(1, 12), Paragraph("Observations", st["Heading3"])]
+    rows = [[k, Paragraph(str(v), st["Normal"])]
+            for k, v in obs_lines(rep.get("observations"))]
+    t3 = Table(rows, colWidths=[110, 380])
+    t3.setStyle(TableStyle([("GRID", (0, 0), (-1, -1), 0.3, colors.grey),
+                            ("FONTSIZE", (0, 0), (-1, -1), 9),
+                            ("VALIGN", (0, 0), (-1, -1), "TOP")]))
+    el.append(t3)
+    photos = (rep.get("observations") or {}).get("photo_files") or []
+    if photos:
+        try:
+            from reportlab.lib.utils import ImageReader
+            from reportlab.platypus import Image
+            cells = []
+            for p in photos[:6]:
+                iw, ih = ImageReader(p).getSize()
+                w = 155.0
+                cells.append(Image(p, width=w, height=w * ih / float(iw)))
+            grid = [cells[i:i + 3] for i in range(0, len(cells), 3)]
+            el += [Spacer(1, 8), Table(grid)]
+        except Exception:
+            pass
     if rep.get("certificate"):
         el += [Spacer(1, 8), Paragraph("Wipe certificate SHA-256: %s"
                                        % rep["certificate"], st["Normal"])]
@@ -586,7 +644,7 @@ def write_pdf(path, rep):
 
 
 def fallback_terminal(reason, dry_run=False):
-    print("LaptopSeal window not available (%s). Starting terminal version."
+    print("ITAD Laptop window not available (%s). Starting terminal version."
           % reason)
     args = [PY, os.path.join(TOOLS_DIR, "itad_run.py")]
     if dry_run:
@@ -595,8 +653,326 @@ def fallback_terminal(reason, dry_run=False):
 
 
 # =============================================================================
+# drawing helpers (Canvas): colours, rounded shapes and line icons
+# =============================================================================
+def mix(a, b, t):
+    a, b = a.lstrip("#"), b.lstrip("#")
+    ca = [int(a[i:i + 2], 16) for i in (0, 2, 4)]
+    cb = [int(b[i:i + 2], 16) for i in (0, 2, 4)]
+    return "#%02x%02x%02x" % tuple(int(x + (y - x) * t) for x, y in zip(ca, cb))
+
+
+def round_rect(c, x1, y1, x2, y2, r, **kw):
+    r = max(0, min(r, (x2 - x1) / 2, (y2 - y1) / 2))
+    pts = [x1 + r, y1, x2 - r, y1, x2, y1, x2, y1 + r, x2, y2 - r, x2, y2,
+           x2 - r, y2, x1 + r, y2, x1, y2, x1, y2 - r, x1, y1 + r, x1, y1]
+    return c.create_polygon(pts, smooth=True, **kw)
+
+
+def draw_icon(c, kind, cx, cy, s, color, width=2):
+    """Simple line icons. s = icon size in pixels."""
+    h = s / 2.0
+    w = max(1, int(width))
+    def L(*p, **k):
+        k.setdefault("width", w)
+        return c.create_line(*p, fill=color, capstyle="round",
+                             joinstyle="round", **k)
+    if kind == "search":
+        r = s * 0.30
+        c.create_oval(cx - r - s * .08, cy - r - s * .08, cx + r - s * .08,
+                      cy + r - s * .08, outline=color, width=w)
+        L(cx + s * .14, cy + s * .14, cx + h * .85, cy + h * .85)
+    elif kind == "chip":
+        q = s * 0.26
+        c.create_rectangle(cx - q, cy - q, cx + q, cy + q, outline=color,
+                           width=w)
+        c.create_rectangle(cx - q * .45, cy - q * .45, cx + q * .45,
+                           cy + q * .45, outline=color, width=w)
+        for k in (-0.5, 0, 0.5):
+            d = q * k
+            L(cx + d, cy - q, cx + d, cy - q - s * .12)
+            L(cx + d, cy + q, cx + d, cy + q + s * .12)
+            L(cx - q, cy + d, cx - q - s * .12, cy + d)
+            L(cx + q, cy + d, cx + q + s * .12, cy + d)
+    elif kind == "bin":
+        L(cx - h * .7, cy - h * .5, cx + h * .7, cy - h * .5)
+        L(cx - h * .2, cy - h * .5, cx - h * .2, cy - h * .7, cx + h * .2,
+          cy - h * .7, cx + h * .2, cy - h * .5)
+        c.create_polygon(cx - h * .55, cy - h * .35, cx + h * .55, cy - h * .35,
+                         cx + h * .42, cy + h * .7, cx - h * .42, cy + h * .7,
+                         outline=color, fill="", width=w)
+        for k in (-0.2, 0.0, 0.2):
+            L(cx + h * k, cy - h * .15, cx + h * k, cy + h * .5)
+    elif kind in ("clipboard", "doc"):
+        x1, y1, x2, y2 = cx - h * .55, cy - h * .7, cx + h * .55, cy + h * .75
+        c.create_rectangle(x1, y1, x2, y2, outline=color, width=w)
+        if kind == "clipboard":
+            c.create_rectangle(cx - h * .25, y1 - h * .12, cx + h * .25,
+                               y1 + h * .12, outline=color, fill=color)
+        for k in (-0.3, 0.0, 0.3):
+            L(x1 + h * .25, cy + h * k + h * .1, x2 - h * .25,
+              cy + h * k + h * .1)
+    elif kind == "shield":
+        c.create_polygon(cx, cy - h * .85, cx + h * .7, cy - h * .55,
+                         cx + h * .6, cy + h * .25, cx, cy + h * .85,
+                         cx - h * .6, cy + h * .25, cx - h * .7, cy - h * .55,
+                         outline=color, fill="", width=w, smooth=False)
+        L(cx - h * .28, cy, cx - h * .05, cy + h * .25, cx + h * .32,
+          cy - h * .22)
+    elif kind == "lock":
+        c.create_rectangle(cx - h * .45, cy - h * .05, cx + h * .45,
+                           cy + h * .6, outline=color, fill=color, width=w)
+        c.create_arc(cx - h * .3, cy - h * .55, cx + h * .3, cy + h * .1,
+                     start=0, extent=180, style="arc", outline=color, width=w)
+    elif kind == "leaf":
+        c.create_polygon(cx - h * .6, cy + h * .6, cx - h * .55, cy - h * .2,
+                         cx + h * .1, cy - h * .7, cx + h * .7, cy - h * .7,
+                         cx + h * .6, cy - h * .05, cx + h * .1, cy + h * .55,
+                         outline=color, fill="", width=w, smooth=True)
+        L(cx - h * .6, cy + h * .6, cx + h * .35, cy - h * .35)
+    elif kind in ("recycle", "refresh"):
+        r = h * .62
+        c.create_arc(cx - r, cy - r, cx + r, cy + r, start=30, extent=140,
+                     style="arc", outline=color, width=w)
+        c.create_arc(cx - r, cy - r, cx + r, cy + r, start=210, extent=140,
+                     style="arc", outline=color, width=w)
+        for ang in (30, 210):
+            a = math.radians(ang)
+            x, y = cx + r * math.cos(a), cy - r * math.sin(a)
+            dx = 1 if ang == 30 else -1
+            L(x - dx * h * .28, y - dx * h * .05, x, y,
+              x + dx * h * .05, y - dx * h * .3)
+    elif kind == "check":
+        L(cx - h * .5, cy, cx - h * .12, cy + h * .4, cx + h * .55,
+          cy - h * .4)
+    elif kind == "cross":
+        L(cx - h * .4, cy - h * .4, cx + h * .4, cy + h * .4)
+        L(cx - h * .4, cy + h * .4, cx + h * .4, cy - h * .4)
+    elif kind == "home":
+        c.create_polygon(cx, cy - h * .75, cx + h * .75, cy - h * .05,
+                         cx + h * .55, cy - h * .05, cx + h * .55, cy + h * .7,
+                         cx - h * .55, cy + h * .7, cx - h * .55, cy - h * .05,
+                         cx - h * .75, cy - h * .05, outline=color,
+                         fill=color, width=w)
+        c.create_rectangle(cx - h * .15, cy + h * .25, cx + h * .15,
+                           cy + h * .7, outline="", fill=c["bg"])
+    elif kind == "plus":
+        L(cx - h * .6, cy, cx + h * .6, cy)
+        L(cx, cy - h * .6, cx, cy + h * .6)
+    elif kind == "gear":
+        r1, r2 = h * .45, h * .72
+        for k in range(8):
+            a = math.radians(k * 45)
+            L(cx + r1 * math.cos(a), cy + r1 * math.sin(a),
+              cx + r2 * math.cos(a), cy + r2 * math.sin(a), width=w + 2)
+        c.create_oval(cx - r1 - 1, cy - r1 - 1, cx + r1 + 1, cy + r1 + 1,
+                      outline=color, width=w, fill=c["bg"])
+        c.create_oval(cx - h * .18, cy - h * .18, cx + h * .18, cy + h * .18,
+                      outline=color, width=w)
+    elif kind == "info":
+        c.create_oval(cx - h * .75, cy - h * .75, cx + h * .75, cy + h * .75,
+                      outline=color, width=w)
+        L(cx, cy - h * .05, cx, cy + h * .4)
+        c.create_oval(cx - 1.5, cy - h * .38 - 1.5, cx + 1.5, cy - h * .38 + 1.5,
+                      fill=color, outline=color)
+    elif kind == "power":
+        c.create_arc(cx - h * .65, cy - h * .6, cx + h * .65, cy + h * .7,
+                     start=120, extent=300, style="arc", outline=color, width=w)
+        L(cx, cy - h * .75, cx, cy - h * .05)
+    elif kind == "user":
+        c.create_oval(cx - h * .3, cy - h * .7, cx + h * .3, cy - h * .1,
+                      outline=color, width=w)
+        c.create_arc(cx - h * .65, cy + h * .05, cx + h * .65, cy + h * 1.25,
+                     start=0, extent=180, style="arc", outline=color, width=w)
+    elif kind == "monitor":
+        c.create_rectangle(cx - h * .75, cy - h * .6, cx + h * .75, cy + h * .3,
+                           outline=color, width=w)
+        L(cx, cy + h * .3, cx, cy + h * .6)
+        L(cx - h * .35, cy + h * .62, cx + h * .35, cy + h * .62)
+        L(cx - h * .3, cy - h * .15, cx - h * .05, cy + h * .05, cx + h * .35,
+          cy - h * .3)
+    elif kind == "clock":
+        c.create_oval(cx - h * .75, cy - h * .75, cx + h * .75, cy + h * .75,
+                      outline=color, width=w)
+        L(cx, cy - h * .45, cx, cy, cx + h * .3, cy + h * .2)
+    elif kind == "play":
+        c.create_polygon(cx - h * .3, cy - h * .45, cx + h * .5, cy,
+                         cx - h * .3, cy + h * .45, fill=color, outline=color)
+    elif kind == "arrow":
+        L(cx - h * .25, cy - h * .45, cx + h * .25, cy, cx - h * .25,
+          cy + h * .45)
+    elif kind == "camera":
+        c.create_rectangle(cx - h * .75, cy - h * .4, cx + h * .75, cy + h * .55,
+                           outline=color, width=w)
+        c.create_oval(cx - h * .3, cy - h * .2, cx + h * .3, cy + h * .4,
+                      outline=color, width=w)
+
+
+def draw_laptop_art(c, cx, cy, s):
+    """The glowing laptop on the Home screen. s = laptop width."""
+    rnd = __import__("random").Random(7)
+    glow = "#0E3F80"
+    # soft glow behind
+    for i in range(18, 0, -1):
+        t = i / 18.0
+        rx, ry = s * (0.25 + 0.55 * t), s * (0.18 + 0.36 * t)
+        c.create_oval(cx - rx, cy - ry, cx + rx, cy + ry, outline="",
+                      fill=mix(glow, BG, t ** 0.7))
+    # orbit (glow + line)
+    box = (cx - s * .78, cy - s * .48, cx + s * .70, cy + s * .30)
+    c.create_arc(*box, start=165, extent=240, style="arc",
+                 outline=mix(CYAN, BG, .65), width=9)
+    c.create_arc(*box, start=165, extent=240, style="arc", outline=CYAN,
+                 width=3)
+    # screen corners (a little perspective)
+    tl, tr = (cx - s * .40, cy - s * .33), (cx + s * .34, cy - s * .40)
+    br, bl = (cx + s * .38, cy + s * .12), (cx - s * .36, cy + s * .15)
+    c.create_polygon(*tl, *tr, *br, *bl, fill="#071F44",
+                     outline="#8FD3FF", width=3)
+
+    def lerp(p, q, t):
+        return p[0] + (q[0] - p[0]) * t, p[1] + (q[1] - p[1]) * t
+    for k in range(1, 12):
+        t = k / 12.0
+        a, b = lerp(tl, tr, t), lerp(bl, br, t)
+        c.create_line(*a, *b, fill="#1B5AA6", width=1)
+    for k in range(1, 8):
+        t = k / 8.0
+        a, b = lerp(tl, bl, t), lerp(tr, br, t)
+        c.create_line(*a, *b, fill="#1B5AA6", width=1)
+    # data flowing out of the screen (small squares)
+    for _ in range(46):
+        t1, t2 = rnd.random(), rnd.random()
+        x = tr[0] - s * .05 + t1 * s * .32
+        y = tr[1] + s * .05 + t2 * s * .45
+        q = s * (0.006 + rnd.random() * 0.014)
+        c.create_rectangle(x - q, y - q, x + q, y + q, outline="",
+                           fill=mix(CYAN, BG, rnd.random() * .6))
+    # base and keyboard
+    base = (bl[0], bl[1], br[0], br[1], cx + s * .56, cy + s * .30,
+            cx - s * .54, cy + s * .35)
+    c.create_polygon(*base, fill="#1A2C47", outline="#A9C2E0", width=2)
+    for k in range(1, 5):
+        t = k / 5.0 * 0.62
+        a = lerp(bl, (cx - s * .54, cy + s * .35), t)
+        b = lerp(br, (cx + s * .56, cy + s * .30), t)
+        c.create_line(a[0] + s * .08, a[1], b[0] - s * .10, b[1],
+                      fill="#4E6A90", width=2, dash=(4, 2))
+    # arrow coming in from the left
+    c.create_line(cx - s * .95, cy - s * .02, cx - s * .70, cy - s * .10,
+                  cx - s * .22, cy - s * .08, fill=CYAN, width=3,
+                  smooth=True, arrow="last", arrowshape=(14, 16, 6))
+    # shield with lock above the screen
+    sx, sy, sh = cx - s * .20, cy - s * .48, s * .20
+    c.create_polygon(sx, sy - sh * .5, sx + sh * .42, sy - sh * .32,
+                     sx + sh * .36, sy + sh * .15, sx, sy + sh * .5,
+                     sx - sh * .36, sy + sh * .15, sx - sh * .42, sy - sh * .32,
+                     fill="#0A2A5C", outline="#9EDCFF", width=3)
+    draw_icon(c, "lock", sx, sy + sh * .02, sh * .55, "#CFEFFF", 2)
+    # three tiles: check, bin, refresh
+    for (tx, ty, kind) in ((cx + s * .62, cy - s * .30, "check"),
+                           (cx + s * .72, cy - s * .06, "bin"),
+                           (cx + s * .58, cy + s * .14, "refresh")):
+        q = s * .085
+        round_rect(c, tx - q, ty - q, tx + q, ty + q, q * .35,
+                   fill="#0A2550", outline=CYAN, width=3)
+        draw_icon(c, kind, tx, ty, q * 1.25, "#DFF4FF", 3)
+
+
+# =============================================================================
 # the window
 # =============================================================================
+class Pill:
+    """Rounded button drawn on a Canvas (main buttons)."""
+
+    def __init__(self, app, parent, text, cmd, width=300, height=54,
+                 kind="primary", icon=None):
+        self.app, self.cmd, self.kind, self.icon = app, cmd, kind, icon
+        self.text, self.state, self.hover = text, "normal", False
+        self.w, self.h = app.px(width), app.px(height)
+        self.c = app.tk.Canvas(parent, width=self.w, height=self.h,
+                               bg=parent["bg"], highlightthickness=0,
+                               cursor="hand2")
+        self.c.bind("<Button-1>", lambda e: self.click())
+        self.c.bind("<Enter>", lambda e: self.set_hover(True))
+        self.c.bind("<Leave>", lambda e: self.set_hover(False))
+        self.draw()
+
+    def set_hover(self, v):
+        self.hover = v
+        self.draw()
+
+    def click(self):
+        if self.state == "normal" and self.cmd:
+            self.cmd()
+
+    def configure(self, text=None, state=None, command=None):
+        if text is not None:
+            self.text = text
+        if state is not None:
+            self.state = state
+        if command is not None:
+            self.cmd = command
+        self.c.configure(cursor="hand2" if self.state == "normal" else "")
+        self.draw()
+
+    config = configure
+
+    def pack(self, **kw):
+        self.c.pack(**kw)
+        return self
+
+    def grid(self, **kw):
+        self.c.grid(**kw)
+        return self
+
+    def pack_forget(self):
+        self.c.pack_forget()
+
+    def draw(self):
+        c, w, h, r = self.c, self.w, self.h, self.h / 2.0
+        c.delete("all")
+        off = self.state != "normal"
+        if self.kind == "primary":
+            c0, c1 = ("#2A3B55", "#2A3B55") if off else (
+                ("#5CD0FF", "#2A8BFF") if self.hover else ("#3EC3FF", "#1C74F2"))
+            steps = max(2, int(w - 2 * r))
+            for i in range(steps):
+                col = mix(c0, c1, i / float(steps))
+                c.create_line(r + i, 0, r + i, h, fill=col)
+            c.create_oval(0, 0, 2 * r, h, fill=c0, outline=c0)
+            c.create_oval(w - 2 * r - 1, 0, w - 1, h, fill=c1, outline=c1)
+            c.create_rectangle(r, 0, r + 2, h, fill=c0, outline="")
+            fg = "#7F93B0" if off else "white"
+        elif self.kind == "danger":
+            col = "#3A2A33" if off else ("#E5484D" if self.hover else "#C93A3F")
+            round_rect(c, 1, 1, w - 1, h - 1, r, fill=col, outline=col)
+            fg = "#8E7C86" if off else "white"
+        else:  # outline / ghost
+            line = "#3A4E6E" if off else (CYAN if self.hover else
+                                          ("#2E8BFF" if self.kind == "outline"
+                                           else BORDER_HI))
+            fill = BG2 if self.kind == "ghost" else c["bg"]
+            round_rect(c, 2, 2, w - 2, h - 2, min(r, self.app.px(10)),
+                       fill=fill, outline=line, width=2)
+            fg = "#6F86A8" if off else (CYAN if self.kind == "outline"
+                                        else TEXT)
+        font = self.app.F(15 if self.h > self.app.px(46) else 11, True)
+        if self.icon:
+            ix = w / 2.0 - self.app.measure(self.text, font) / 2.0 - h * .35
+            if self.kind == "primary":
+                c.create_oval(ix - h * .30, h * .2, ix + h * .30, h * .8,
+                              fill="#06142B", outline="")
+                draw_icon(c, self.icon, ix + 2, h / 2.0, h * .34,
+                          "white" if not off else "#7F93B0", 2)
+            else:
+                draw_icon(c, self.icon, ix, h / 2.0, h * .42, fg, 2)
+            c.create_text(w / 2.0 + h * .2, h / 2.0, text=self.text, fill=fg,
+                          font=font)
+        else:
+            c.create_text(w / 2.0, h / 2.0, text=self.text, fill=fg, font=font)
+
+
 class App:
     def __init__(self, tk, ttk, messagebox, root, dry_run, quick, windowed):
         self.tk, self.ttk, self.mb, self.root = tk, ttk, messagebox, root
@@ -604,6 +980,8 @@ class App:
         self.q = queue.Queue()
         self.log = []
         self.wiping = False
+        self.job_active = False
+        self.job_page = "start"
         self.out_dir, self.persistent = pick_out_dir()
         self.p_check = os.path.join(self.out_dir, "laptop_check.json")
         self.p_wipe_dry = os.path.join(self.out_dir, "laptop_wipe_preview.json")
@@ -616,26 +994,38 @@ class App:
         self.s = {"job_id": "JOB-" + now().strftime("%Y%m%d-%H%M%S"),
                   "serial": ser if valid_serial(ser) else "",
                   "check": None, "wipe_dry": None, "wipe": None,
-                  "wipe_state": "NOT RUN", "auto": [], "manual": {}}
-        self.pages, self.step_labels, self.prog = {}, [], {}
+                  "wipe_state": "NOT RUN", "auto": [], "manual": {},
+                  "obs": {"grade": "", "issues": [], "notes": "",
+                          "photos": []}}
+        self.pages, self.nav_items, self.stage_w = {}, {}, {}
         self.test_rows, self.manual_btns = {}, {}
         self.fails, self.locked_until = 0, 0.0
-        root.title("LaptopSeal")
-        root.configure(bg=PANEL)
+        sw, sh = root.winfo_screenwidth(), root.winfo_screenheight()
+        if windowed:
+            sw, sh = 1366, 768
+        self.sc = max(0.78, min(1.3, min(sw / 1600.0, sh / 900.0)))
+        self._fonts = {}
+        root.title("ITAD Laptop")
+        root.configure(bg=BG)
         if not windowed:
             try:
                 root.attributes("-fullscreen", True)
             except Exception:
                 pass
         else:
-            root.geometry("1100x700")
+            root.geometry("1366x768")
         self.setup_style()
         self.build_shell()
+        self.build_home()
         self.build_login()
         self.build_start()
         self.build_checks()
         self.build_wipe()
+        self.build_observe()
         self.build_report()
+        self.build_settings()
+        self.build_about()
+        self.reset_stages()
         # "Next laptop" restarts the window but keeps the technician
         # signed in (only if that account still has a password).
         keep = os.environ.get("ITAD_SIGNED_IN", "")
@@ -644,41 +1034,68 @@ class App:
             self.signed_in(acc["name"])
         else:
             os.environ.pop("ITAD_SIGNED_IN", None)
-            self.show_login()
+            self.v_tech.set("")
+            self.show("home")
+        self.refresh_home()
+        self.tick()
         root.protocol("WM_DELETE_WINDOW", self.quit)
         root.bind("<Control-q>", lambda e: self.quit())
         root.bind("<Escape>", lambda e: self.toggle_fullscreen())
         root.after(100, self.pump)
 
     # ---------- small widget helpers ----------
+    def px(self, n):
+        return int(round(n * self.sc))
+
     def F(self, size, bold=False):
-        return (FONT, size, "bold") if bold else (FONT, size)
+        return (FONT, max(7, int(round(size * self.sc))),
+                "bold" if bold else "normal")
+
+    def measure(self, text, font):
+        key = font
+        if key not in self._fonts:
+            self._fonts[key] = self.tk.font.Font(family=font[0], size=font[1],
+                                                 weight=font[2])
+        return self._fonts[key].measure(text)
 
     def lbl(self, parent, text="", size=11, bold=False, fg=TEXT, bg=None, **kw):
+        if "wraplength" in kw:
+            kw["wraplength"] = self.px(kw["wraplength"])
         return self.tk.Label(parent, text=text, font=self.F(size, bold), fg=fg,
                              bg=bg if bg else NAVY, anchor="w", justify="left",
                              **kw)
 
-    def btn(self, parent, text, cmd, kind="primary"):
-        bg = {"primary": BLUE, "ghost": BORDER, "danger": "#8A2A2A"}[kind]
-        return self.tk.Button(parent, text=text, command=cmd, bg=bg, fg="white",
-                              activebackground=CYAN, activeforeground=NAVY,
-                              disabledforeground="#6F86A8", relief="flat", bd=0,
-                              padx=18, pady=9, font=self.F(11, True),
-                              cursor="hand2")
+    def btn(self, parent, text, cmd, kind="primary", width=None):
+        # kind: primary / ghost / danger / outline
+        w = width or max(120, int(self.measure(text, self.F(11, True))
+                                  / self.sc) + 44)
+        return Pill(self, parent, text, cmd, width=w, height=42, kind=kind)
 
-    def card(self, parent, title):
+    def icon(self, parent, kind, size=26, color=CYAN, bg=None, width=2):
+        s = self.px(size)
+        c = self.tk.Canvas(parent, width=s, height=s, bg=bg or parent["bg"],
+                           highlightthickness=0)
+        draw_icon(c, kind, s / 2.0, s / 2.0, s * .8, color, width)
+        return c
+
+    def card(self, parent, title, icon=None):
         tk = self.tk
         outer = tk.Frame(parent, bg=NAVY, highlightbackground=BORDER,
                          highlightthickness=1)
-        tk.Label(outer, text=title.upper(), font=self.F(9, True), fg=MUTED,
-                 bg=NAVY, anchor="w").pack(fill="x", padx=14, pady=(10, 2))
+        head = tk.Frame(outer, bg=NAVY)
+        head.pack(fill="x", padx=self.px(16), pady=(self.px(12), self.px(4)))
+        if icon:
+            self.icon(head, icon, 18, CYAN, NAVY).pack(side="left",
+                                                      padx=(0, self.px(8)))
+        tk.Label(head, text=title.upper(), font=self.F(9, True), fg=MUTED,
+                 bg=NAVY, anchor="w").pack(side="left")
         inner = tk.Frame(outer, bg=NAVY)
-        inner.pack(fill="both", expand=True, padx=14, pady=(0, 12))
+        inner.pack(fill="both", expand=True, padx=self.px(16),
+                   pady=(0, self.px(14)))
         return outer, inner
 
     def entry(self, parent, var, readonly=False, secret=False):
-        return self.tk.Entry(parent, textvariable=var, bg=PANEL, fg=TEXT,
+        return self.tk.Entry(parent, textvariable=var, bg=BG2, fg=TEXT,
                              insertbackground=TEXT, relief="flat",
                              font=self.F(12), highlightthickness=1,
                              highlightbackground=BORDER, highlightcolor=CYAN,
@@ -693,75 +1110,283 @@ class App:
             st.theme_use("clam")
         except Exception:
             pass
-        st.configure("TCombobox", fieldbackground=PANEL, background=BORDER,
+        st.configure("TCombobox", fieldbackground=BG2, background=BORDER,
                      foreground=TEXT, arrowcolor=TEXT, bordercolor=BORDER,
-                     lightcolor=BORDER, darkcolor=BORDER)
-        st.map("TCombobox", fieldbackground=[("readonly", PANEL)],
+                     lightcolor=BORDER, darkcolor=BORDER, padding=4)
+        st.map("TCombobox", fieldbackground=[("readonly", BG2)],
                foreground=[("readonly", TEXT)],
-               selectbackground=[("readonly", PANEL)],
+               selectbackground=[("readonly", BG2)],
                selectforeground=[("readonly", TEXT)])
         st.configure("Seal.Horizontal.TProgressbar", troughcolor=BORDER,
                      background=CYAN, bordercolor=BORDER, lightcolor=CYAN,
-                     darkcolor=CYAN)
-        for opt, val in (("*TCombobox*Listbox.background", PANEL),
+                     darkcolor=CYAN, thickness=self.px(14))
+        for opt, val in (("*TCombobox*Listbox.background", BG2),
                          ("*TCombobox*Listbox.foreground", TEXT),
-                         ("*TCombobox*Listbox.selectBackground", BLUE)):
+                         ("*TCombobox*Listbox.selectBackground", BLUE),
+                         ("*TCombobox*Listbox.font", self.F(12))):
             self.root.option_add(opt, val)
 
+    # ---------- the frame around every screen ----------
     def build_shell(self):
         tk, root = self.tk, self.root
-        head = tk.Frame(root, bg="white")
+        # header
+        head = tk.Frame(root, bg=BG)
         head.pack(fill="x")
-        tk.Label(head, text="Laptop", font=self.F(22, True), fg=NAVY,
-                 bg="white").pack(side="left", padx=(22, 0), pady=10)
-        tk.Label(head, text="Seal", font=self.F(22, True), fg=BLUE,
-                 bg="white").pack(side="left", pady=10)
-        tk.Label(head, text="Test. Wipe. Verify. Certify.   v%s" % VERSION,
-                 font=self.F(10), fg="#4A5D78", bg="white").pack(
-            side="right", padx=22)
+        logo = tk.Canvas(head, width=self.px(62), height=self.px(70), bg=BG,
+                         highlightthickness=0)
+        logo.pack(side="left", padx=(self.px(28), self.px(12)),
+                  pady=self.px(10))
+        self.draw_logo(logo, self.px(31), self.px(35), self.px(58))
+        brand = tk.Frame(head, bg=BG)
+        brand.pack(side="left")
+        name = tk.Frame(brand, bg=BG)
+        name.pack(anchor="w")
+        tk.Label(name, text="IT", font=self.F(30, True), fg="white",
+                 bg=BG).pack(side="left")
+        tk.Label(name, text="AD", font=self.F(30, True), fg=BLUE2,
+                 bg=BG).pack(side="left")
+        tk.Label(brand, text="S E C U R E   •   T E S T   •   "
+                             "W I P E   •   R E D E P L O Y",
+                 font=self.F(8), fg="#BFD3F2", bg=BG).pack(anchor="w")
+        # status box (right)
+        box = tk.Frame(head, bg=CARD2, highlightbackground=BORDER,
+                       highlightthickness=1)
+        box.pack(side="right", padx=self.px(28))
+        self.icon(box, "monitor", 30, "#D8E6FA", CARD2).pack(
+            side="left", padx=(self.px(16), self.px(8)), pady=self.px(10))
+        s1 = tk.Frame(box, bg=CARD2)
+        s1.pack(side="left", padx=(0, self.px(18)))
+        tk.Label(s1, text="Booted from USB", font=self.F(10), fg=TEXT,
+                 bg=CARD2).pack(anchor="w")
+        self.h_ready = tk.Label(s1, text="", font=self.F(9), bg=CARD2)
+        self.h_ready.pack(anchor="w")
+        tk.Frame(box, bg=BORDER, width=1).pack(side="left", fill="y",
+                                               pady=self.px(10))
+        self.icon(box, "clock", 28, "#D8E6FA", CARD2).pack(
+            side="left", padx=(self.px(16), self.px(8)))
+        s2 = tk.Frame(box, bg=CARD2)
+        s2.pack(side="left", padx=(0, self.px(18)))
+        self.h_time = tk.Label(s2, text="", font=self.F(10), fg=TEXT,
+                               bg=CARD2)
+        self.h_time.pack(anchor="w")
+        self.h_date = tk.Label(s2, text="", font=self.F(9), fg=MUTED,
+                               bg=CARD2)
+        self.h_date.pack(anchor="w")
+        self.h_sep2 = tk.Frame(box, bg=BORDER, width=1)
+        self.h_user_i = self.icon(box, "user", 26, "#D8E6FA", CARD2)
+        self.h_user = tk.Label(box, text="", font=self.F(10, True), fg=TEXT,
+                               bg=CARD2)
         if self.dry:
             tk.Label(head, text="  DRY RUN - nothing will be erased  ",
                      font=self.F(10, True), fg=NAVY, bg=WARN).pack(
-                side="right", padx=10)
-        tk.Frame(root, bg=CYAN, height=3).pack(fill="x")
-        tabs = tk.Frame(root, bg=DEEP)
-        tabs.pack(fill="x")
-        for name in STEPS:
-            lab = tk.Label(tabs, text=name, font=self.F(11), fg="#A7BAD4",
-                           bg=DEEP, padx=20, pady=9)
-            lab.pack(side="left", padx=(8, 0), pady=(8, 0))
-            self.step_labels.append(lab)
-        self.content = tk.Frame(root, bg=PANEL)
+                side="right", padx=4)
+        tk.Frame(root, bg=BORDER, height=1).pack(fill="x")
+
+        # footer
+        foot = tk.Frame(root, bg=BG)
+        foot.pack(side="bottom", fill="x")
+        tk.Frame(root, bg=BORDER, height=1).pack(side="bottom", fill="x")
+        tk.Label(foot, text="ITAD Laptop v%s" % VERSION, font=self.F(9),
+                 fg=MUTED, bg=BG).pack(side="left", padx=self.px(30),
+                                       pady=self.px(8))
+        tk.Label(foot, text="Better devices. A cleaner planet.",
+                 font=self.F(10), fg=TEXT, bg=BG).pack(side="right",
+                                                       padx=(0, self.px(30)))
+        self.icon(foot, "leaf", 20, OK, BG).pack(side="right",
+                                                 padx=(0, self.px(8)))
+
+        # left menu
+        body = tk.Frame(root, bg=BG)
+        body.pack(fill="both", expand=True)
+        side = tk.Frame(body, bg=SIDE, width=self.px(230))
+        side.pack(side="left", fill="y")
+        side.pack_propagate(False)
+        tk.Frame(body, bg=BORDER, width=1).pack(side="left", fill="y")
+        tk.Frame(side, bg=SIDE, height=self.px(26)).pack()
+        for key, text, ic, cmd in (
+                ("home", "Home", "home", lambda: self.show("home")),
+                ("job", "New Job", "plus", self.nav_new_job),
+                ("settings", "Settings", "gear", lambda: self.show("settings")),
+                ("about", "About", "info", lambda: self.show("about")),
+                ("power", "Shutdown", "power", self.power_off)):
+            self.nav_items[key] = self.nav_item(side, text, ic, cmd)
+
+        # main area: screens on top, the 5 stages at the bottom
+        main = tk.Frame(body, bg=BG)
+        main.pack(side="left", fill="both", expand=True)
+        self.build_stagebar(main)
+        self.content = tk.Frame(main, bg=BG)
         self.content.pack(fill="both", expand=True)
         self.content.grid_rowconfigure(0, weight=1)
         self.content.grid_columnconfigure(0, weight=1)
 
+    def draw_logo(self, c, cx, cy, s):
+        h = s / 2.0
+        pts = (cx, cy - h * .95, cx + h * .85, cy - h * .6, cx + h * .75,
+               cy + h * .3, cx, cy + h * .95, cx - h * .75, cy + h * .3,
+               cx - h * .85, cy - h * .6)
+        c.create_polygon(*pts, fill="#0B2A5A", outline="#9FD8FF", width=3)
+        q = h * .42
+        round_rect(c, cx - q, cy - q * .8, cx + q, cy + q * .45, 4,
+                   fill="", outline="white", width=3)
+        c.create_line(cx - q * 1.25, cy + q * .75, cx + q * 1.25,
+                      cy + q * .75, fill="white", width=3, capstyle="round")
+
+    def nav_item(self, parent, text, ic, cmd):
+        tk = self.tk
+        f = tk.Frame(parent, bg=SIDE, highlightthickness=1,
+                     highlightbackground=SIDE, cursor="hand2")
+        f.pack(fill="x", padx=self.px(16), pady=self.px(6))
+        c = tk.Canvas(f, width=self.px(40), height=self.px(40), bg=SIDE,
+                      highlightthickness=0)
+        c.pack(side="left", padx=(self.px(10), self.px(12)), pady=self.px(6))
+        lab = tk.Label(f, text=text, font=self.F(12), fg=TEXT, bg=SIDE)
+        lab.pack(side="left")
+        item = {"frame": f, "canvas": c, "label": lab, "icon": ic,
+                "active": False}
+
+        def paint(hover=False):
+            act = item["active"]
+            bg = "#1767E6" if act else ("#0F2A52" if hover else SIDE)
+            f.configure(bg=bg, highlightbackground="#3B8BFF" if act else bg)
+            c.configure(bg=bg)
+            lab.configure(bg=bg, font=self.F(12, act))
+            c.delete("all")
+            s = self.px(40)
+            if not act:
+                round_rect(c, 2, 2, s - 2, s - 2, self.px(9), fill="#0E2447",
+                           outline="#21406E", width=1)
+            draw_icon(c, ic, s / 2.0, s / 2.0, s * .48, "white", 2)
+        item["paint"] = paint
+        for w in (f, c, lab):
+            w.bind("<Button-1>", lambda e: cmd())
+            w.bind("<Enter>", lambda e: paint(True))
+            w.bind("<Leave>", lambda e: paint(False))
+        paint()
+        return item
+
+    def set_nav(self, key):
+        for k, it in self.nav_items.items():
+            it["active"] = (k == key)
+            it["paint"]()
+
+    def build_stagebar(self, parent):
+        tk = self.tk
+        wrap = tk.Frame(parent, bg=BG)
+        wrap.pack(side="bottom", fill="x", padx=self.px(28),
+                  pady=(self.px(4), self.px(16)))
+        bar = tk.Frame(wrap, bg=NAVY, highlightbackground=BORDER,
+                       highlightthickness=1)
+        bar.pack(fill="x")
+        col = 0
+        for i, (key, title, sub, ic, color) in enumerate(STAGES):
+            cell = tk.Frame(bar, bg=NAVY)
+            cell.grid(row=0, column=col, sticky="w", padx=self.px(16),
+                      pady=self.px(12))
+            bar.grid_columnconfigure(col, weight=1)
+            s = self.px(64)
+            c = tk.Canvas(cell, width=s, height=s, bg=NAVY,
+                          highlightthickness=0)
+            c.pack(side="left", padx=(0, self.px(12)))
+            txt = tk.Frame(cell, bg=NAVY)
+            txt.pack(side="left")
+            t = tk.Label(txt, text="%d. %s" % (i + 1, title),
+                         font=self.F(13, True), fg=color, bg=NAVY)
+            t.pack(anchor="w")
+            st = tk.Label(txt, text=sub, font=self.F(9), fg=MUTED, bg=NAVY,
+                          justify="left", wraplength=self.px(150))
+            st.pack(anchor="w")
+            self.stage_w[key] = {"canvas": c, "title": t, "status": st,
+                                 "color": color, "icon": ic, "sub": sub}
+            col += 1
+            if i < len(STAGES) - 1:
+                ar = tk.Canvas(bar, width=self.px(18), height=self.px(30),
+                               bg=NAVY, highlightthickness=0)
+                draw_icon(ar, "arrow", self.px(9), self.px(15), self.px(26),
+                          "#5D8FD6", 2)
+                ar.grid(row=0, column=col)
+                col += 1
+
+    def set_stage(self, key, state, text=None):
+        w = self.stage_w[key]
+        c, s, color = w["canvas"], self.px(64), w["color"]
+        c.delete("all")
+        ring = {"run": CYAN, "ok": color, "warn": color, "bad": color,
+                "idle": color}.get(state, color)
+        if state == "idle":
+            ring = mix(color, NAVY, .25)
+        c.create_oval(4, 4, s - 4, s - 4, outline=mix(ring, NAVY, .7),
+                      width=self.px(8))
+        c.create_oval(5, 5, s - 5, s - 5, outline=ring, width=3,
+                      fill="#081A35")
+        draw_icon(c, w["icon"], s / 2.0, s / 2.0, s * .48, ring, 3)
+        if state in ("ok", "bad", "warn"):
+            # small status badge at the bottom right of the circle
+            bc = {"ok": OK, "bad": BAD, "warn": WARN}[state]
+            r = s * .17
+            bx, by = s - r - 1, s - r - 1
+            c.create_oval(bx - r, by - r, bx + r, by + r, fill=bc,
+                          outline=NAVY, width=2)
+            if state == "warn":
+                c.create_text(bx, by, text="!", fill=NAVY,
+                              font=self.F(9, True))
+            else:
+                draw_icon(c, "check" if state == "ok" else "cross", bx, by,
+                          r * 1.5, NAVY, 2)
+        fg = {"run": CYAN, "ok": OK, "bad": BAD, "warn": WARN}.get(state, MUTED)
+        w["status"].configure(text=text or w["sub"], fg=fg)
+
+    def reset_stages(self):
+        for key in self.stage_w:
+            self.set_stage(key, "idle")
+
+    def tick(self):
+        t = now()
+        self.h_time.configure(text=t.strftime("%I:%M %p").lstrip("0"))
+        self.h_date.configure(text="%d %s" % (t.day, t.strftime("%b %Y")))
+        if self.persistent:
+            self.h_ready.configure(text="● Ready", fg=OK)
+        else:
+            self.h_ready.configure(text="● No ITAD_DATA stick", fg=WARN)
+        self.root.after(1000, self.tick)
+
     def new_page(self, name):
-        f = self.tk.Frame(self.content, bg=PANEL)
+        f = self.tk.Frame(self.content, bg=BG)
         f.grid(row=0, column=0, sticky="nsew")
         self.pages[name] = f
         return f
 
     def bar(self, page):
-        b = self.tk.Frame(page, bg=PANEL)
-        b.pack(side="bottom", fill="x", padx=24, pady=(6, 16))
-        left = self.tk.Frame(b, bg=PANEL)
+        b = self.tk.Frame(page, bg=BG)
+        b.pack(side="bottom", fill="x", padx=self.px(28),
+               pady=(self.px(6), self.px(10)))
+        left = self.tk.Frame(b, bg=BG)
         left.pack(side="left")
-        right = self.tk.Frame(b, bg=PANEL)
+        right = self.tk.Frame(b, bg=BG)
         right.pack(side="right")
-        mid = self.lbl(b, "", 10, fg=MUTED, bg=PANEL)
-        mid.pack(side="left", padx=18)
+        mid = self.lbl(b, "", 10, fg=MUTED, bg=BG)
+        mid.pack(side="left", padx=self.px(18))
         return left, right, mid
+
+    def page_title(self, page, title, sub=""):
+        f = self.tk.Frame(page, bg=BG)
+        f.pack(fill="x", padx=self.px(28), pady=(self.px(18), self.px(8)))
+        self.lbl(f, title, 20, True, bg=BG).pack(anchor="w")
+        if sub:
+            self.lbl(f, sub, 10, fg=MUTED, bg=BG).pack(anchor="w")
+        return f
 
     def show(self, name):
         self.pages[name].tkraise()
-
-    def set_step(self, i):
-        for k, lab in enumerate(self.step_labels):
-            if k == i:
-                lab.configure(bg=PANEL, fg="white", font=self.F(11, True))
-            else:
-                lab.configure(bg=DEEP, fg="#A7BAD4", font=self.F(11))
+        nav = {"home": "home", "settings": "settings",
+               "about": "about"}.get(name, "job")
+        self.set_nav(nav)
+        if name in ("start", "checks", "wipe", "observe", "report"):
+            self.job_page = name
+        if name == "home":
+            self.refresh_home()
+        if name == "settings":
+            self.refresh_settings()
 
     def toggle_fullscreen(self):
         try:
@@ -769,11 +1394,6 @@ class App:
             self.root.attributes("-fullscreen", not cur)
         except Exception:
             pass
-
-    def set_prog(self, name, text, color=MUTED):
-        lab = self.prog.get(name)
-        if lab:
-            lab.configure(text=text, fg=color)
 
     # ---------- running the other tools ----------
     def pump(self):
@@ -841,37 +1461,233 @@ class App:
     def tech(self):
         return self.v_tech.get().strip()
 
-    # ---------- screen 1: sign in ----------
+    # ---------- Home ----------
+    def build_home(self):
+        tk = self.tk
+        pg = self.new_page("home")
+        self.v_tech = tk.StringVar(value="")
+        self.v_job = tk.StringVar(value=self.s["job_id"])
+        self.v_asset = tk.StringVar(value=self.s["serial"])
+        self.v_loc = tk.StringVar(value=LOCATIONS[0])
+        right = tk.Frame(pg, bg=BG, width=self.px(370))
+        right.pack(side="right", fill="y", padx=(0, self.px(28)),
+                   pady=(self.px(26), self.px(10)))
+        right.pack_propagate(False)
+        self.hero = tk.Canvas(pg, bg=BG, highlightthickness=0)
+        self.hero.pack(side="left", fill="both", expand=True)
+        self.hero_btn = Pill(self, self.hero, "Start New Job",
+                             self.home_start, width=370, height=72,
+                             kind="primary", icon="play")
+        self.hero_img = None
+        for nm in ("hero.png", "home.png", "background.png"):
+            p = os.path.join(TOOLS_DIR, nm)
+            if os.path.isfile(p):
+                try:
+                    self.hero_img = tk.PhotoImage(file=p)
+                except Exception:
+                    self.hero_img = None
+                break
+        self.hero.bind("<Configure>", lambda e: self.draw_hero())
+
+        # right panel: technician + current job
+        box = tk.Frame(right, bg=NAVY, highlightbackground="#2B5FA8",
+                       highlightthickness=1)
+        box.pack(fill="x")
+        p = self.px
+        top = tk.Frame(box, bg=NAVY, cursor="hand2")
+        top.pack(fill="x", padx=p(22), pady=(p(18), p(12)))
+        self.icon(top, "user", 30, TEXT, NAVY).pack(side="left",
+                                                    padx=(0, p(12)))
+        tk.Label(top, text="Technician Login", font=self.F(14, True),
+                 fg=TEXT, bg=NAVY).pack(side="left")
+        self.icon(top, "arrow", 18, TEXT, NAVY).pack(side="right")
+        for w in top.winfo_children() + [top]:
+            w.bind("<Button-1>", lambda e: self.home_login())
+        tk.Frame(box, bg=BORDER, height=1).pack(fill="x", padx=p(22))
+        who = tk.Frame(box, bg=NAVY)
+        who.pack(fill="x", padx=p(22), pady=p(14))
+        self.icon(who, "user", 28, MUTED, NAVY).pack(side="left",
+                                                     padx=(0, p(12)))
+        wt = tk.Frame(who, bg=NAVY)
+        wt.pack(side="left")
+        self.hm_who = tk.Label(wt, text="", font=self.F(12), fg=TEXT,
+                               bg=NAVY)
+        self.hm_who.pack(anchor="w")
+        self.hm_who2 = tk.Label(wt, text="", font=self.F(9), fg=MUTED,
+                                bg=NAVY)
+        self.hm_who2.pack(anchor="w")
+        tk.Frame(box, bg=BORDER, height=1).pack(fill="x", padx=p(22))
+        jt = tk.Frame(box, bg=NAVY)
+        jt.pack(fill="x", padx=p(22), pady=(p(14), p(6)))
+        self.icon(jt, "doc", 28, TEXT, NAVY).pack(side="left",
+                                                  padx=(0, p(12)))
+        tk.Label(jt, text="Current Job", font=self.F(13, True), fg=TEXT,
+                 bg=NAVY).pack(side="left")
+        grid = tk.Frame(box, bg=NAVY)
+        grid.pack(fill="x", padx=p(22))
+        self.hm_rows = {}
+        for r, k in enumerate(("Job ID", "Asset ID", "Serial Number",
+                               "Location")):
+            tk.Label(grid, text=k, font=self.F(11), fg=TEXT, bg=NAVY).grid(
+                row=r, column=0, sticky="w", pady=p(4))
+            tk.Label(grid, text=":", font=self.F(11), fg=TEXT, bg=NAVY).grid(
+                row=r, column=1, padx=p(10))
+            v = tk.Label(grid, text="-", font=self.F(11), fg=MUTED, bg=NAVY,
+                         anchor="w", wraplength=p(170), justify="left")
+            v.grid(row=r, column=2, sticky="w")
+            self.hm_rows[k] = v
+        self.hm_btn = Pill(self, box, "Login", self.home_login, width=320,
+                           height=50, kind="outline", icon="user")
+        self.hm_btn.pack(padx=p(22), pady=(p(16), p(20)), fill="x")
+
+    def draw_hero(self):
+        c = self.hero
+        w, h = c.winfo_width(), c.winfo_height()
+        if w < 50 or h < 50:
+            return
+        c.delete("all")
+        p = self.px
+        # faint server racks in the background
+        for k in range(7):
+            x = w * (0.42 + k * 0.085)
+            c.create_rectangle(x, h * .02, x + w * .05, h * .70,
+                               fill=mix(BG, "#0D2448", .55), outline="")
+            for j in range(10):
+                y = h * (0.06 + j * 0.062)
+                c.create_line(x + 4, y, x + w * .05 - 4, y,
+                              fill=mix(BG, "#1C4A85", .5))
+        if self.hero_img is not None:
+            c.create_image(w * .66, h * .40, image=self.hero_img)
+        else:
+            s = min(w * 0.44, h * 0.70)
+            draw_laptop_art(c, w * .66, h * .40, s)
+        x = p(40)
+        c.create_text(x, h * .17, text="Welcome to", anchor="w", fill="white",
+                      font=self.F(31, True))
+        f_big = self.F(50, True)
+        c.create_text(x, h * .31, text="ITAD", anchor="w", fill="white",
+                      font=f_big)
+        c.create_text(x + self.measure("ITAD ", f_big), h * .31,
+                      text="Laptop", anchor="w", fill=BLUE2, font=f_big)
+        c.create_text(x, h * .43, text="Secure Data. Sustainable Future.",
+                      anchor="w", fill=TEXT, font=self.F(16))
+        c.create_text(x, h * .50, anchor="nw", fill="#C9D8EE",
+                      font=self.F(11), width=p(330),
+                      text="This application helps you test, diagnose, wipe "
+                           "and prepare laptops for their next life — "
+                           "safely, securely and efficiently.")
+        bx = x
+        for ic, t1, t2, col in (("shield", "Data", "Security", "#4FA8FF"),
+                                ("leaf", "Environmental", "Responsibility",
+                                 "#34D399"),
+                                ("recycle", "IT Asset", "Recycling",
+                                 "#4FC3F7")):
+            r = p(21)
+            cy = h * .73
+            c.create_oval(bx, cy - r, bx + 2 * r, cy + r, outline=col,
+                          width=2, fill=mix(BG, col, .12))
+            draw_icon(c, ic, bx + r, cy, r * 1.1, col, 2)
+            c.create_text(bx + 2 * r + p(10), cy - p(8), text=t1, anchor="w",
+                          fill=TEXT, font=self.F(9))
+            c.create_text(bx + 2 * r + p(10), cy + p(8), text=t2, anchor="w",
+                          fill=TEXT, font=self.F(9))
+            bx += 2 * r + p(20) + max(self.measure(t1, self.F(9)),
+                                      self.measure(t2, self.F(9))) + p(14)
+        c.create_window(w * .55, h * .90, window=self.hero_btn.c)
+
+    def refresh_home(self):
+        name = self.tech()
+        if name:
+            self.hm_who.configure(text="Signed in as %s" % name, fg=OK)
+            self.hm_who2.configure(text="Ready to start a job")
+            self.hm_btn.configure(text="Sign out", command=self.sign_out)
+            self.h_sep2.pack(side="left", fill="y", pady=self.px(10))
+            self.h_user_i.pack(side="left", padx=(self.px(16), self.px(8)))
+            self.h_user.configure(text=name)
+            self.h_user.pack(side="left", padx=(0, self.px(18)))
+        else:
+            self.hm_who.configure(text="Not logged in", fg=TEXT)
+            self.hm_who2.configure(text="Please login to continue")
+            self.hm_btn.configure(text="Login", command=self.home_login)
+            for w in (self.h_sep2, self.h_user_i, self.h_user):
+                w.pack_forget()
+        vals = {"Job ID": self.job() if self.job_active else "-",
+                "Asset ID": (self.asset() or "-") if self.job_active else "-",
+                "Serial Number": self.serial() or "-",
+                "Location": self.v_loc.get() if self.job_active else "-"}
+        for k, v in vals.items():
+            self.hm_rows[k].configure(text=v, fg=TEXT if v != "-" else MUTED)
+        self.hero_btn.configure(text="Continue Job" if self.job_active
+                                else "Start New Job")
+
+    def home_start(self):
+        if self.job_active:
+            self.show(self.job_page)
+        elif not self.tech():
+            self.show_login()
+        else:
+            self.show("start")
+
+    def home_login(self):
+        if self.tech():
+            self.show("start")
+        else:
+            self.show_login()
+
+    def nav_new_job(self):
+        if self.wiping:
+            self.mb.showinfo("Wipe running", "A wipe is running. Please wait "
+                             "until it has finished.")
+            return
+        if self.job_active:
+            if self.mb.askyesno("New job", "A job is open for this laptop.\n\n"
+                                "Go back to it?\n\n(Choose No to start a new "
+                                "job and lose the current one.)"):
+                self.show(self.job_page)
+            else:
+                self.next_laptop()
+            return
+        self.home_start()
+
+    # ---------- sign in ----------
     def build_login(self):
         tk = self.tk
         pg = self.new_page("login")
         self.v_user = tk.StringVar(value="")
         self.v_pass = tk.StringVar(value="")
-        mid = tk.Frame(pg, bg=PANEL)
-        mid.place(relx=0.5, rely=0.42, anchor="center")
-        box = tk.Frame(mid, bg=NAVY, highlightbackground=BORDER,
+        mid = tk.Frame(pg, bg=BG)
+        mid.place(relx=0.5, rely=0.45, anchor="center")
+        box = tk.Frame(mid, bg=NAVY, highlightbackground="#2B5FA8",
                        highlightthickness=1)
         box.pack()
         inner = tk.Frame(box, bg=NAVY)
-        inner.pack(padx=40, pady=30)
-        self.lbl(inner, "Technician sign in", 20, True).pack(anchor="w")
-        self.lbl(inner, "Sign in with your own name and password.", 10,
-                 fg=MUTED).pack(anchor="w", pady=(4, 18))
+        inner.pack(padx=self.px(44), pady=self.px(32))
+        head = tk.Frame(inner, bg=NAVY)
+        head.pack(anchor="w", fill="x")
+        self.icon(head, "user", 36, CYAN, NAVY).pack(side="left",
+                                                     padx=(0, self.px(14)))
+        ht = tk.Frame(head, bg=NAVY)
+        ht.pack(side="left")
+        self.lbl(ht, "Technician sign in", 20, True).pack(anchor="w")
+        self.lbl(ht, "Sign in with your own name and password.", 10,
+                 fg=MUTED).pack(anchor="w")
+        tk.Frame(inner, bg=NAVY, height=self.px(18)).pack()
         self.lbl(inner, "NAME", 9, True, fg=MUTED).pack(anchor="w")
         self.l_user = self.entry(inner, self.v_user)
         self.l_user.configure(width=32)
-        self.l_user.pack(fill="x", pady=(2, 12), ipady=4)
+        self.l_user.pack(fill="x", pady=(2, self.px(12)), ipady=self.px(6))
         self.lbl(inner, "PASSWORD", 9, True, fg=MUTED).pack(anchor="w")
         self.l_pass = self.entry(inner, self.v_pass, secret=True)
-        self.l_pass.pack(fill="x", pady=(2, 6), ipady=4)
+        self.l_pass.pack(fill="x", pady=(2, self.px(6)), ipady=self.px(6))
         self.l_msg = self.lbl(inner, "", 10, fg=WARN, wraplength=380)
-        self.l_msg.pack(anchor="w", pady=(4, 10))
-        self.l_go = self.btn(inner, "Sign in", self.do_login)
+        self.l_msg.pack(anchor="w", pady=(self.px(4), self.px(12)))
+        self.l_go = Pill(self, inner, "Sign in", self.do_login, width=380,
+                         height=50, kind="primary")
         self.l_go.pack(fill="x")
         self.l_user.bind("<Return>", lambda e: self.l_pass.focus_set())
         self.l_pass.bind("<Return>", lambda e: self.do_login())
         left, right, msg = self.bar(pg)
-        self.btn(left, "Power off", self.power_off, "ghost").pack()
+        self.btn(left, "Back", lambda: self.show("home"), "ghost").pack()
         self.btn(right, "Add technician", self.add_tech_dialog,
                  "ghost").pack()
         self.l_where = msg
@@ -892,7 +1708,6 @@ class App:
             "No ITAD_DATA stick: new accounts and reports are lost at "
             "power off.", fg=WARN)
         self.show("login")
-        self.set_step(0)
         self.root.after(200, self.l_user.focus_set)
 
     def do_login(self):
@@ -930,13 +1745,18 @@ class App:
         self.v_tech.set(name)
         os.environ["ITAD_SIGNED_IN"] = name
         self.start_msg.configure(text="")
+        self.refresh_home()
         self.show("start")
-        self.set_step(1)
 
     def sign_out(self):
+        if self.wiping:
+            self.mb.showinfo("Wipe running", "A wipe is running. Please wait.")
+            return
         os.environ.pop("ITAD_SIGNED_IN", None)
+        self.v_tech.set("")
         self.v_user.set("")
-        self.show_login()
+        self.refresh_home()
+        self.show("home")
 
     def add_tech_dialog(self):
         tk = self.tk
@@ -945,15 +1765,16 @@ class App:
         need_ok = bool(approvers)
         win = tk.Toplevel(self.root)
         win.title("Add technician")
-        win.configure(bg=NAVY)
+        win.configure(bg=NAVY, highlightbackground="#2B5FA8",
+                      highlightthickness=1)
         win.transient(self.root)
         inner = tk.Frame(win, bg=NAVY)
-        inner.pack(padx=30, pady=24)
+        inner.pack(padx=self.px(32), pady=self.px(26))
         self.lbl(inner, "Add or change a technician", 16, True).pack(
             anchor="w")
         self.lbl(inner, "The password is saved as a secure hash, never as "
-                        "plain text.", 10, fg=MUTED).pack(anchor="w",
-                                                          pady=(2, 14))
+                        "plain text.", 10, fg=MUTED).pack(
+            anchor="w", pady=(2, self.px(14)))
         v = {k: tk.StringVar(value="") for k in
              ("name", "pw1", "pw2", "by", "bypw")}
         fields = [("NEW TECHNICIAN NAME", "name", False),
@@ -968,12 +1789,12 @@ class App:
             self.lbl(inner, label, 9, True, fg=MUTED).pack(anchor="w")
             e = self.entry(inner, v[key], secret=secret)
             e.configure(width=34)
-            e.pack(fill="x", pady=(2, 10), ipady=3)
+            e.pack(fill="x", pady=(2, self.px(10)), ipady=self.px(4))
             first = first or e
         msg = self.lbl(inner, "" if need_ok else
                        "This is the first account, so no approval is "
                        "needed.", 10, fg=MUTED, wraplength=360)
-        msg.pack(anchor="w", pady=(0, 10))
+        msg.pack(anchor="w", pady=(0, self.px(10)))
 
         def save():
             name = v["name"].get().strip()
@@ -1009,6 +1830,11 @@ class App:
                 note += ("  WARNING: no ITAD_DATA stick, this account is "
                          "lost at power off.")
             self.v_user.set(name)
+            if self.pages["settings"].winfo_ismapped():
+                self.refresh_settings()
+            else:
+                self.show_login()
+                self.v_user.set(name)
             self.l_msg.configure(text=note + "  Now sign in.",
                                  fg=OK if self.persistent else WARN)
             self.l_pass.focus_set()
@@ -1016,8 +1842,8 @@ class App:
         bf = tk.Frame(inner, bg=NAVY)
         bf.pack(fill="x")
         self.btn(bf, "Save", save).pack(side="left")
-        self.btn(bf, "Cancel", win.destroy, "ghost").pack(side="left",
-                                                           padx=8)
+        self.btn(bf, "Cancel", win.destroy, "ghost").pack(
+            side="left", padx=self.px(8))
         win.update_idletasks()
         sw, sh = win.winfo_screenwidth(), win.winfo_screenheight()
         w, h = win.winfo_reqwidth(), win.winfo_reqheight()
@@ -1028,19 +1854,18 @@ class App:
             pass
         first.focus_set()
 
-    # ---------- screen 2: job ----------
+    # ---------- job details ----------
     def build_start(self):
         tk = self.tk
         pg = self.new_page("start")
-        self.v_tech = tk.StringVar(value="")
-        self.v_job = tk.StringVar(value=self.s["job_id"])
-        self.v_asset = tk.StringVar(value=self.s["serial"])
-        self.v_loc = tk.StringVar(value=LOCATIONS[0])
-        form = tk.Frame(pg, bg=PANEL)
-        form.pack(fill="x", padx=24, pady=(18, 8))
+        self.page_title(pg, "New job", "Check the details, then start the "
+                                       "checks.")
+        form = tk.Frame(pg, bg=BG)
+        form.pack(fill="x", padx=self.px(23), pady=(0, self.px(6)))
         for c in range(4):
             form.grid_columnconfigure(c, weight=1, uniform="f")
-        fields = [("Technician (signed in)", "entry", self.v_tech, None, True),
+        fields = [("Technician (signed in)", "entry", self.v_tech, None,
+                   True),
                   ("Job ID", "entry", self.v_job, None, False),
                   ("Asset ID", "entry", self.v_asset, None,
                    bool(self.s["serial"])),
@@ -1048,25 +1873,27 @@ class App:
         for c, (name, kind, var, vals, ro) in enumerate(fields):
             cell = tk.Frame(form, bg=NAVY, highlightbackground=BORDER,
                             highlightthickness=1)
-            cell.grid(row=0, column=c, sticky="nsew", padx=5)
+            cell.grid(row=0, column=c, sticky="nsew", padx=self.px(5))
             tk.Label(cell, text=name.upper(), font=self.F(9, True), fg=MUTED,
-                     bg=NAVY, anchor="w").pack(fill="x", padx=12, pady=(10, 2))
+                     bg=NAVY, anchor="w").pack(fill="x", padx=self.px(14),
+                                               pady=(self.px(10), 2))
             if kind == "combo":
                 w = self.ttk.Combobox(cell, textvariable=var, values=vals,
                                       state="readonly" if ro else "normal",
                                       font=self.F(12))
             else:
                 w = self.entry(cell, var, readonly=ro)
-            w.pack(fill="x", padx=12, pady=(0, 12))
+            w.pack(fill="x", padx=self.px(14), pady=(0, self.px(12)),
+                   ipady=self.px(3))
         hint = ("Asset ID is filled from the serial number."
                 if self.s["serial"] else
                 "No usable serial number found: type the Asset ID.")
-        self.lbl(pg, hint, 10, fg=MUTED, bg=PANEL).pack(
-            fill="x", padx=30, pady=(0, 6))
-        body = tk.Frame(pg, bg=PANEL)
-        body.pack(fill="both", expand=True, padx=24, pady=6)
-        dev_outer, dev = self.card(body, "Detected laptop")
-        dev_outer.pack(side="left", fill="both", expand=True, padx=5)
+        self.lbl(pg, hint, 10, fg=MUTED, bg=BG).pack(
+            fill="x", padx=self.px(30), pady=(0, self.px(6)))
+        body = tk.Frame(pg, bg=BG)
+        body.pack(fill="both", expand=True, padx=self.px(23), pady=4)
+        dev_outer, dev = self.card(body, "Detected laptop", "monitor")
+        dev_outer.pack(fill="both", expand=True, padx=self.px(5))
         i = self.ident
         stor = ["%s (%s) %s GB" % (d.get("model") or "Drive",
                                    d.get("drive_type", "?"), d.get("size_gb"))
@@ -1082,27 +1909,22 @@ class App:
                 ("BIOS / boot", "%s %s  %s" % (i.get("bios_vendor", ""),
                                                i.get("bios_version", ""),
                                                i.get("boot_mode", "")))]
-        for r, (k, v) in enumerate(rows):
-            self.lbl(dev, k, 10, fg=MUTED).grid(row=r, column=0, sticky="nw",
-                                                 padx=(0, 14), pady=2)
-            self.lbl(dev, v, 11, True, wraplength=520).grid(
-                row=r, column=1, sticky="nw", pady=2)
-        pr_outer, pr = self.card(body, "Progress")
-        pr_outer.pack(side="left", fill="y", padx=5)
-        for r, name in enumerate(("Absolute", "Enrolment", "Wipe", "Tests",
-                                  "Report")):
-            self.lbl(pr, name, 11).grid(row=r, column=0, sticky="w",
-                                        padx=(0, 20), pady=5)
-            lab = self.lbl(pr, "waiting", 11, fg=MUTED)
-            lab.grid(row=r, column=1, sticky="w", pady=5)
-            self.prog[name] = lab
+        half = (len(rows) + 1) // 2
+        for c in (1, 3):
+            dev.grid_columnconfigure(c, weight=1)
+        for n, (k, v) in enumerate(rows):
+            r, c = (n, 0) if n < half else (n - half, 2)
+            self.lbl(dev, k, 10, fg=MUTED).grid(row=r, column=c, sticky="nw",
+                                                 padx=(0, self.px(14)),
+                                                 pady=self.px(4))
+            self.lbl(dev, v, 11, True, wraplength=330).grid(
+                row=r, column=c + 1, sticky="nw", pady=self.px(4),
+                padx=(0, self.px(20)))
         left, right, mid = self.bar(pg)
-        self.btn(left, "Power off", self.power_off, "ghost").pack(
-            side="left")
-        self.btn(left, "Sign out", self.sign_out, "ghost").pack(
-            side="left", padx=(10, 0))
+        self.btn(left, "Sign out", self.sign_out, "ghost").pack(side="left")
         self.start_msg = mid
-        self.btn(right, "Start checks", self.start_checks).pack()
+        Pill(self, right, "Start checks", self.start_checks, width=230,
+             height=48, icon="play").pack()
 
     def start_checks(self):
         if not self.tech():
@@ -1113,34 +1935,38 @@ class App:
                                      fg=WARN)
             return
         self.start_msg.configure(text="")
+        self.job_active = True
         self.run_check()
 
-    # ---------- screen 2: checks ----------
+    # ---------- checks ----------
     def build_checks(self):
         tk = self.tk
         pg = self.new_page("checks")
         self.c_banner = tk.Label(pg, text="Checking...", font=self.F(20, True),
-                                 fg=TEXT, bg=BORDER, pady=14)
-        self.c_banner.pack(fill="x", padx=24, pady=(18, 10))
-        row = tk.Frame(pg, bg=PANEL)
-        row.pack(fill="both", expand=True, padx=24)
-        a_outer, a = self.card(row, "1  Absolute lock")
-        a_outer.pack(side="left", fill="both", padx=5)
-        self.c_abs = self.lbl(a, "-", 20, True, fg=MUTED)
+                                 fg=TEXT, bg=BORDER, pady=self.px(14))
+        self.c_banner.pack(fill="x", padx=self.px(28),
+                           pady=(self.px(18), self.px(10)))
+        row = tk.Frame(pg, bg=BG)
+        row.pack(fill="both", expand=True, padx=self.px(23))
+        a_outer, a = self.card(row, "Absolute lock", "lock")
+        a_outer.pack(side="left", fill="both", padx=self.px(5))
+        self.c_abs = self.lbl(a, "-", 22, True, fg=MUTED)
         self.c_abs.pack(anchor="w")
-        self.c_abs_note = self.lbl(a, "", 10, fg=MUTED, wraplength=260)
-        self.c_abs_note.pack(anchor="w", pady=(8, 0))
-        e_outer, e = self.card(row, "2  Enrolment (Intune / Autopilot / SCCM)")
-        e_outer.pack(side="left", fill="both", expand=True, padx=5)
-        self.c_enr = self.lbl(e, "-", 20, True, fg=MUTED)
+        self.c_abs_note = self.lbl(a, "", 10, fg=MUTED, wraplength=280)
+        self.c_abs_note.pack(anchor="w", pady=(self.px(8), 0))
+        e_outer, e = self.card(row, "Enrolment (Intune / Autopilot / SCCM)",
+                               "shield")
+        e_outer.pack(side="left", fill="both", expand=True, padx=self.px(5))
+        self.c_enr = self.lbl(e, "-", 22, True, fg=MUTED)
         self.c_enr.pack(anchor="w")
         self.c_enr_note = self.lbl(e, "", 11, wraplength=560)
-        self.c_enr_note.pack(anchor="w", pady=(8, 0))
+        self.c_enr_note.pack(anchor="w", pady=(self.px(8), 0))
         left, right, mid = self.bar(pg)
-        self.btn(left, "Power off", self.power_off, "ghost").pack()
+        self.btn(left, "Home", lambda: self.show("home"), "ghost").pack()
         self.c_status = mid
-        self.c_again = self.btn(right, "Run check again", self.run_check, "ghost")
-        self.c_again.pack(side="left", padx=(0, 10))
+        self.c_again = self.btn(right, "Run check again", self.run_check,
+                                "ghost")
+        self.c_again.pack(side="left", padx=(0, self.px(10)))
         self.c_next = self.btn(right, "Continue to wipe", self.enter_wipe)
         self.c_next.pack(side="left")
 
@@ -1151,7 +1977,6 @@ class App:
 
     def run_check(self):
         self.show("checks")
-        self.set_step(2)
         self.banner("Checking...", "wait")
         for w, t in ((self.c_abs, "-"), (self.c_enr, "-")):
             w.configure(text=t, fg=MUTED)
@@ -1159,8 +1984,7 @@ class App:
         self.c_enr_note.configure(text="")
         self.c_again.configure(state="disabled")
         self.c_next.configure(state="disabled")
-        self.set_prog("Absolute", "checking...", CYAN)
-        self.set_prog("Enrolment", "checking...", CYAN)
+        self.set_stage("check", "run", "Checking Absolute and enrolment...")
         if os.path.exists(self.p_check):
             try:
                 os.remove(self.p_check)
@@ -1179,8 +2003,7 @@ class App:
             self.banner("CHECK DID NOT RUN", "bad")
             self.c_enr_note.configure(text="\n".join(self.log[-6:]) or
                                       "laptop_check.py gave no result.")
-            self.set_prog("Absolute", "error", BAD)
-            self.set_prog("Enrolment", "error", BAD)
+            self.set_stage("check", "bad", "Check did not run")
             return
         result = data.get("result", "?")
         ar = data.get("absolute_result", "?")
@@ -1190,8 +2013,6 @@ class App:
         enr_text = {"CLEAN": "CLEAN", "BLOCKED": "ACTIVE ENROLMENT",
                     "UNKNOWN": "NOT CHECKED"}.get(er, "PAST ENROLMENT")
         self.c_enr.configure(text=enr_text, fg=colors.get(er, WARN))
-        self.set_prog("Absolute", ar, colors.get(ar, WARN))
-        self.set_prog("Enrolment", enr_text, colors.get(er, WARN))
         reasons = data.get("block_reasons") or (
             list(data.get("absolute_signs") or [])
             + [e.get("description", "") for e in
@@ -1200,12 +2021,14 @@ class App:
             self.c_abs_note.configure(text="\n".join(data["absolute_signs"][:4]))
         if result == "BLOCKED":
             self.banner("BLOCKED  -  DO NOT WIPE", "bad")
+            self.set_stage("check", "bad", "Blocked - do not wipe")
             self.c_enr_note.configure(
                 text="Why it is blocked:\n- " + "\n- ".join(reasons[:6] or ["see report"])
                 + "\n\nAsk the customer to remove this laptop from their "
                   "portal, then run the check again.")
         elif result == "CLEAR":
             self.banner("CLEAR  -  ready to wipe", "ok")
+            self.set_stage("check", "ok", "Clear - ready to wipe")
             self.c_enr_note.configure(
                 text="No on-disk sign of Autopilot or MDM.\n\nStill check the "
                      "serial number in the customer's Intune / ABM portal "
@@ -1213,68 +2036,77 @@ class App:
             self.c_next.configure(state="normal")
         else:
             self.banner("CANNOT CHECK  -  manager decision needed", "warn")
+            self.set_stage("check", "warn", "Cannot check - ask manager")
             notes = (data.get("notes") or []) + (data.get("warnings") or [])
             self.c_enr_note.configure(
                 text="\n".join(notes[:6] or ["Some drives could not be read."]))
 
-    # ---------- screen 3: wipe and tests ----------
+    # ---------- wipe and tests ----------
     def build_wipe(self):
         tk = self.tk
         pg = self.new_page("wipe")
-        row = tk.Frame(pg, bg=PANEL)
-        row.pack(fill="both", expand=True, padx=24, pady=(18, 6))
-        w_outer, w = self.card(row, "3  Wipe")
-        w_outer.pack(side="left", fill="both", padx=5)
+        row = tk.Frame(pg, bg=BG)
+        row.pack(fill="both", expand=True, padx=self.px(23),
+                 pady=(self.px(18), self.px(6)))
+        w_outer, w = self.card(row, "Wipe", "bin")
+        w_outer.pack(side="left", fill="both", padx=self.px(5))
         self.w_title = self.lbl(w, "Checking drives...", 15, True)
         self.w_title.pack(anchor="w")
-        self.w_targets = self.lbl(w, "", 10, fg=MUTED, wraplength=380)
-        self.w_targets.pack(anchor="w", pady=(6, 10))
+        self.w_targets = self.lbl(w, "", 10, fg=MUTED, wraplength=400)
+        self.w_targets.pack(anchor="w", pady=(self.px(6), self.px(10)))
         self.w_progress = tk.Frame(w, bg=NAVY)
         self.w_pbar = self.ttk.Progressbar(
             self.w_progress, style="Seal.Horizontal.TProgressbar",
-            mode="determinate", maximum=100, length=380)
+            mode="determinate", maximum=100, length=self.px(400))
         self.w_pbar.pack(anchor="w")
         self.w_pct = self.lbl(self.w_progress, "0%", 10, fg=MUTED)
         self.w_pct.pack(anchor="w", pady=(4, 0))
         self.w_confirm = tk.Frame(w, bg=NAVY)
-        self.w_ask = self.lbl(self.w_confirm, "", 10, fg=WARN, wraplength=380)
+        self.w_ask = self.lbl(self.w_confirm, "", 10, fg=WARN, wraplength=400)
         self.w_ask.pack(anchor="w")
         self.v_confirm = tk.StringVar(value="")
         self.w_entry = self.entry(self.w_confirm, self.v_confirm)
-        self.w_entry.pack(fill="x", pady=8)
+        self.w_entry.pack(fill="x", pady=self.px(8), ipady=self.px(4))
         self.v_confirm.trace_add("write", lambda *a: self.update_confirm())
         btns = tk.Frame(self.w_confirm, bg=NAVY)
         btns.pack(anchor="w")
-        self.w_go = self.btn(btns, "Wipe now", self.do_wipe, "danger")
-        self.w_go.pack(side="left", padx=(0, 8))
+        self.w_go = self.btn(btns, "Wipe now", self.do_wipe, "danger",
+                             width=190)
+        self.w_go.pack(side="left", padx=(0, self.px(8)))
         self.w_skip = self.btn(btns, "Skip wipe", self.skip_wipe, "ghost")
         self.w_skip.pack(side="left")
-        t_outer, t = self.card(row, "4  Component tests")
-        t_outer.pack(side="left", fill="both", expand=True, padx=5)
-        self.t_status = self.lbl(t, "Waiting for the wipe step...", 10, fg=MUTED)
-        self.t_status.grid(row=0, column=0, columnspan=2, sticky="w",
-                           pady=(0, 6))
-        for r, comp in enumerate(COMPONENTS, start=1):
-            self.lbl(t, comp, 11).grid(row=r, column=0, sticky="w",
-                                       padx=(0, 24), pady=2)
+        t_outer, t = self.card(row, "Component tests", "chip")
+        t_outer.pack(side="left", fill="both", expand=True, padx=self.px(5))
+        self.t_status = self.lbl(t, "Waiting for the wipe step...", 10,
+                                 fg=MUTED)
+        self.t_status.grid(row=0, column=0, columnspan=4, sticky="w",
+                           pady=(0, self.px(6)))
+        half = (len(COMPONENTS) + 1) // 2
+        for n, comp in enumerate(COMPONENTS):
+            r, c = (n + 1, 0) if n < half else (n - half + 1, 2)
+            self.lbl(t, comp, 11).grid(row=r, column=c, sticky="w",
+                                       padx=(0, self.px(18)), pady=self.px(3))
             lab = self.lbl(t, "waiting", 11, True, fg=MUTED)
-            lab.grid(row=r, column=1, sticky="w", pady=2)
+            lab.grid(row=r, column=c + 1, sticky="w", pady=self.px(3),
+                     padx=(0, self.px(30)))
             self.test_rows[comp] = lab
         mrow = tk.Frame(t, bg=NAVY)
-        mrow.grid(row=len(COMPONENTS) + 1, column=0, columnspan=2, sticky="w",
-                  pady=(12, 0))
+        mrow.grid(row=half + 1, column=0, columnspan=4, sticky="w",
+                  pady=(self.px(14), 0))
         for comp, fn in (("Screen", self.manual_screen),
                          ("Keyboard", self.manual_keyboard),
                          ("Speakers", self.manual_speakers)):
             b = self.btn(mrow, comp + " test", fn, "ghost")
             b.configure(state="disabled")
-            b.pack(side="left", padx=(0, 8))
+            b.pack(side="left", padx=(0, self.px(8)))
             self.manual_btns[comp] = b
         left, right, mid = self.bar(pg)
-        self.w_power = self.btn(left, "Power off", self.power_off, "ghost")
+        self.w_power = self.btn(left, "Home", lambda: self.show("home"),
+                                "ghost")
         self.w_power.pack()
         self.w_status = mid
-        self.w_next = self.btn(right, "Continue to report", self.finish)
+        self.w_next = self.btn(right, "Continue to observations",
+                               self.enter_observe)
         self.w_next.configure(state="disabled")
         self.w_next.pack()
 
@@ -1300,8 +2132,7 @@ class App:
 
     def enter_wipe(self):
         self.show("wipe")
-        self.set_step(3)
-        self.set_prog("Wipe", "checking drives...", CYAN)
+        self.set_stage("wipe", "run", "Checking drives...")
         self.w_title.configure(text="Checking drives...", fg=TEXT)
         self.w_targets.configure(text="")
         self.hide_all_wipe_parts()
@@ -1317,6 +2148,10 @@ class App:
         self.w_status.configure(text="")
         devs = data.get("devices") or []
         self.w_confirm.pack(anchor="w", fill="x")
+        self.w_entry.pack(fill="x", pady=self.px(8), ipady=self.px(4),
+                          before=self.w_go.c.master)
+        self.w_go.pack(side="left", padx=(0, self.px(8)),
+                       before=self.w_skip.c)
         if not devs:
             why = list(data.get("refusals") or [])
             if data.get("check_report"):
@@ -1329,14 +2164,14 @@ class App:
                                       "the laptop was NOT wiped.")
             self.w_entry.pack_forget()
             self.w_go.pack_forget()
-            self.set_prog("Wipe", "not possible", BAD)
+            self.set_stage("wipe", "bad", "Wipe not possible")
             return
         lines = ["%s   %s   %s GB   SN %s" % (
             d.get("path"), d.get("model") or "?", d.get("size_gb"),
             d.get("serial") or "-") for d in devs]
         self.w_targets.configure(text="These drives will be ERASED:\n" +
                                  "\n".join(lines))
-        self.set_prog("Wipe", "ready", WARN)
+        self.set_stage("wipe", "warn", "Ready - confirm the wipe")
         if self.dry:
             self.w_title.configure(text="Dry run: nothing will be erased",
                                    fg=WARN)
@@ -1365,7 +2200,7 @@ class App:
                                 "will say this laptop was NOT wiped."):
             return
         self.s["wipe_state"] = "SKIPPED"
-        self.set_prog("Wipe", "skipped", WARN)
+        self.set_stage("wipe", "warn", "Skipped - NOT wiped")
         self.w_title.configure(text="Wipe skipped", fg=WARN)
         self.hide_all_wipe_parts()
         self.start_auto_tests()
@@ -1374,7 +2209,7 @@ class App:
         if self.dry:
             self.s["wipe_state"] = "DRY RUN"
             self.s["wipe"] = self.s.get("wipe_dry")
-            self.set_prog("Wipe", "dry run", WARN)
+            self.set_stage("wipe", "warn", "Dry run - nothing erased")
             self.w_title.configure(text="Dry run done (nothing erased)", fg=WARN)
             self.hide_all_wipe_parts()
             self.start_auto_tests()
@@ -1386,7 +2221,7 @@ class App:
         self.w_pct.configure(text="0%")
         self.w_title.configure(text="Wiping... do not power off", fg=WARN)
         self.w_power.configure(state="disabled")
-        self.set_prog("Wipe", "wiping...", CYAN)
+        self.set_stage("wipe", "run", "Wiping... 0%")
         cmd = ([PY, WIPE] + self.common_args() +
                ["--json", self.p_wipe, "--check-report", self.p_check,
                 "--method", "auto", "--commit", "--yes-i-mean-it"])
@@ -1398,6 +2233,7 @@ class App:
             pct = min(100, int(m[-1]))
             self.w_pbar.configure(value=pct)
             self.w_pct.configure(text="%d%%   %s" % (pct, ln[-50:]))
+            self.set_stage("wipe", "run", "Wiping... %d%%" % pct)
         self.w_status.configure(text=ln[:90], fg=MUTED)
 
     def wipe_done(self, rc):
@@ -1409,16 +2245,15 @@ class App:
         if data.get("overall") == "PASS":
             self.s["wipe_state"] = "WIPED"
             self.w_title.configure(text="Wiped and verified", fg=OK)
-            self.set_prog("Wipe", "WIPED", OK)
+            self.set_stage("wipe", "ok", "Wiped and verified")
         else:
             self.s["wipe_state"] = "FAILED"
             self.w_title.configure(text="WIPE FAILED - do not ship", fg=BAD)
-            self.set_prog("Wipe", "FAILED", BAD)
+            self.set_stage("wipe", "bad", "Wipe failed - do not ship")
         self.start_auto_tests()
 
     def start_auto_tests(self):
-        self.set_step(3)
-        self.set_prog("Tests", "running...", CYAN)
+        self.set_stage("test", "run", "Running automatic tests...")
         self.t_status.configure(text="Running automatic tests...", fg=CYAN)
         for comp in COMPONENTS:
             self.set_row(comp, "WAIT")
@@ -1442,6 +2277,8 @@ class App:
                 self.t_status.configure(
                     text="Running automatic tests... %s of %s" % (
                         m.group(1), m.group(2)), fg=CYAN)
+                self.set_stage("test", "run", "Testing %s (%s of %s)" % (
+                    comp, m.group(1), m.group(2)))
         else:
             self.w_status.configure(text=ln[:90], fg=MUTED)
 
@@ -1459,10 +2296,17 @@ class App:
         self.t_status.configure(
             text="Automatic tests finished. Now run the 3 on-screen tests.",
             fg=TEXT)
-        self.set_prog("Tests", "on-screen tests", WARN)
+        self.set_stage("test", "warn", "Now run the on-screen tests")
         for comp, b in self.manual_btns.items():
             b.configure(state="normal")
         self.w_next.configure(state="normal")
+
+    def test_summary(self):
+        tests = self.collect_tests()
+        good = sum(1 for t in tests if t.get("status") == "PASS")
+        bad = sum(1 for t in tests if t.get("status") == "FAIL")
+        state = "bad" if bad else ("ok" if good == len(tests) else "warn")
+        return state, "%d of %d passed" % (good, len(tests))
 
     # ---------- on-screen tests ----------
     def finish_manual(self, comp, status, notes):
@@ -1523,24 +2367,25 @@ class App:
         tk = self.tk
         win = tk.Toplevel(self.root)
         win.title("Keyboard test")
-        win.configure(bg=PANEL)
+        win.configure(bg=NAVY)
         sw, sh = win.winfo_screenwidth(), win.winfo_screenheight()
-        w, h = min(1000, sw), min(430, sh)
+        w, h = min(self.px(1050), sw), min(self.px(460), sh)
         win.geometry("%dx%d+%d+%d" % (w, h, max(0, (sw - w) // 2),
                                       max(0, (sh - h) // 2)))
         tk.Label(win, text="Press every key. Keys turn green when they work.",
-                 font=self.F(12, True), fg=TEXT, bg=PANEL).pack(pady=(14, 8))
+                 font=self.F(12, True), fg=TEXT, bg=NAVY).pack(
+            pady=(self.px(14), self.px(8)))
         cells, seen = {}, set()
         for row in KB_ROWS:
-            rf = tk.Frame(win, bg=PANEL)
+            rf = tk.Frame(win, bg=NAVY)
             rf.pack(pady=3)
             for label, kid in row:
                 c = tk.Label(rf, text=label, font=self.F(10, True), fg=TEXT,
                              bg=BORDER, width=max(3, len(label) + 1), pady=6)
                 c.pack(side="left", padx=2)
                 cells[kid] = c
-        counter = tk.Label(win, text="", font=self.F(10), fg=MUTED, bg=PANEL)
-        counter.pack(pady=(10, 4))
+        counter = tk.Label(win, text="", font=self.F(10), fg=MUTED, bg=NAVY)
+        counter.pack(pady=(self.px(10), 4))
 
         def update():
             counter.configure(text="%d of %d keys pressed" % (len(seen),
@@ -1576,8 +2421,8 @@ class App:
                                ["Key not working. Not pressed: "
                                 + ", ".join(missing[:12])])
 
-        bf = tk.Frame(win, bg=PANEL)
-        bf.pack(pady=8)
+        bf = tk.Frame(win, bg=NAVY)
+        bf.pack(pady=self.px(8))
         self.btn(bf, "Done", done).pack(side="left", padx=6)
         self.btn(bf, "A key does not work", failed, "danger").pack(side="left")
         update()
@@ -1608,42 +2453,160 @@ class App:
         self.set_row("Speakers", "RUN")
         threading.Thread(target=work, daemon=True).start()
 
-    # ---------- screen 4: report ----------
+    # ---------- observations ----------
+    def build_observe(self):
+        tk = self.tk
+        pg = self.new_page("observe")
+        self.page_title(pg, "Observations", "Record the condition of the "
+                        "laptop. This goes into the report.")
+        row = tk.Frame(pg, bg=BG)
+        row.pack(fill="both", expand=True, padx=self.px(23))
+        left = tk.Frame(row, bg=BG)
+        left.pack(side="left", fill="both", expand=True)
+        g_outer, g = self.card(left, "Cosmetic grade", "check")
+        g_outer.pack(fill="x", padx=self.px(5), pady=(0, self.px(10)))
+        self.v_grade = tk.StringVar(value="")
+        gr = tk.Frame(g, bg=NAVY)
+        gr.pack(anchor="w")
+        for code, text in GRADES:
+            tk.Radiobutton(gr, text="%s  %s" % (code, text),
+                           variable=self.v_grade, value=code,
+                           indicatoron=0, font=self.F(11, True), fg=TEXT,
+                           bg=BG2, selectcolor="#1767E6",
+                           activebackground="#0F2A52", activeforeground=TEXT,
+                           relief="flat", bd=0, padx=self.px(14),
+                           pady=self.px(8), highlightthickness=1,
+                           highlightbackground=BORDER, cursor="hand2"
+                           ).pack(side="left", padx=(0, self.px(8)))
+        i_outer, iw = self.card(left, "Issues found (tick all that apply)",
+                                "search")
+        i_outer.pack(fill="both", expand=True, padx=self.px(5))
+        self.v_issues = {}
+        for n, name in enumerate(ISSUES):
+            v = tk.BooleanVar(value=False)
+            self.v_issues[name] = v
+            tk.Checkbutton(iw, text=name, variable=v, font=self.F(11),
+                           fg=TEXT, bg=NAVY, selectcolor=BG2,
+                           activebackground=NAVY, activeforeground=TEXT,
+                           highlightthickness=0, bd=0, anchor="w",
+                           cursor="hand2").grid(
+                row=n // 2, column=n % 2, sticky="w",
+                padx=(0, self.px(30)), pady=self.px(2))
+        right = tk.Frame(row, bg=BG, width=self.px(430))
+        right.pack(side="left", fill="both")
+        right.pack_propagate(False)
+        n_outer, nw = self.card(right, "Notes", "doc")
+        n_outer.pack(fill="both", expand=True, padx=self.px(5),
+                     pady=(0, self.px(10)))
+        self.o_notes = tk.Text(nw, height=5, bg=BG2, fg=TEXT,
+                               insertbackground=TEXT, relief="flat",
+                               font=self.F(11), wrap="word",
+                               highlightthickness=1,
+                               highlightbackground=BORDER,
+                               highlightcolor=CYAN)
+        self.o_notes.pack(fill="both", expand=True)
+        p_outer, pw = self.card(right, "Photos", "camera")
+        p_outer.pack(fill="x", padx=self.px(5))
+        self.o_photos = self.lbl(pw, "No photos added.", 10, fg=MUTED,
+                                 wraplength=380)
+        self.o_photos.pack(anchor="w", pady=(0, self.px(8)))
+        pb = tk.Frame(pw, bg=NAVY)
+        pb.pack(anchor="w")
+        self.btn(pb, "Add photos", self.add_photos, "outline").pack(
+            side="left", padx=(0, self.px(8)))
+        self.btn(pb, "Clear", self.clear_photos, "ghost").pack(side="left")
+        left_b, right_b, mid = self.bar(pg)
+        self.btn(left_b, "Back to tests", lambda: self.show("wipe"),
+                 "ghost").pack()
+        self.o_msg = mid
+        Pill(self, right_b, "Create report", self.finish, width=230,
+             height=48, icon="doc").pack()
+
+    def enter_observe(self):
+        state, txt = self.test_summary()
+        self.set_stage("test", state, txt)
+        self.set_stage("obs", "run", "Add grade, issues, notes")
+        self.show("observe")
+
+    def add_photos(self):
+        try:
+            from tkinter import filedialog
+        except Exception:
+            return
+        start = self.out_dir
+        for c in ("/mnt/itad/photos", os.path.join(self.out_dir, "photos")):
+            if os.path.isdir(c):
+                start = c
+                break
+        files = filedialog.askopenfilenames(
+            parent=self.root, title="Choose photos", initialdir=start,
+            filetypes=[("Photos", "*.jpg *.jpeg *.png *.JPG *.JPEG *.PNG"),
+                       ("All files", "*")])
+        for f in files or []:
+            if f not in self.s["obs"]["photos"]:
+                self.s["obs"]["photos"].append(f)
+        self.show_photos()
+
+    def clear_photos(self):
+        self.s["obs"]["photos"] = []
+        self.show_photos()
+
+    def show_photos(self):
+        ph = self.s["obs"]["photos"]
+        self.o_photos.configure(
+            text=("%d photo(s): " % len(ph) + ", ".join(
+                os.path.basename(p) for p in ph[:6])
+                  + (" ..." if len(ph) > 6 else "")) if ph else
+            "No photos added. Put photos in a 'photos' folder on the "
+            "ITAD_DATA stick, then press Add photos.",
+            fg=TEXT if ph else MUTED)
+
+    def read_observations(self):
+        o = self.s["obs"]
+        o["grade"] = self.v_grade.get()
+        o["issues"] = [k for k, v in self.v_issues.items() if v.get()]
+        o["notes"] = self.o_notes.get("1.0", "end").strip()
+        return o
+
+    # ---------- report ----------
     def build_report(self):
         tk = self.tk
         pg = self.new_page("report")
         self.r_banner = tk.Label(pg, text="", font=self.F(26, True), fg=NAVY,
-                                 bg=GREEN_BAN, pady=14)
-        self.r_banner.pack(fill="x", padx=24, pady=(18, 10))
-        self.r_reasons = self.lbl(pg, "", 10, fg=WARN, bg=PANEL)
-        self.r_reasons.pack(fill="x", padx=30)
-        row = tk.Frame(pg, bg=PANEL)
-        row.pack(fill="both", expand=True, padx=24, pady=6)
-        l_outer, self.r_left = self.card(row, "Laptop and job")
-        l_outer.pack(side="left", fill="both", expand=True, padx=5)
-        r_outer, self.r_right = self.card(row, "Results")
-        r_outer.pack(side="left", fill="both", expand=True, padx=5)
-        self.r_files = self.lbl(pg, "", 10, fg=MUTED, bg=PANEL, wraplength=900)
-        self.r_files.pack(fill="x", padx=30, pady=(0, 4))
+                                 bg=GREEN_BAN, pady=self.px(12))
+        self.r_banner.pack(fill="x", padx=self.px(28),
+                           pady=(self.px(18), self.px(8)))
+        self.r_reasons = self.lbl(pg, "", 10, fg=WARN, bg=BG)
+        self.r_reasons.pack(fill="x", padx=self.px(30))
+        row = tk.Frame(pg, bg=BG)
+        row.pack(fill="both", expand=True, padx=self.px(23), pady=6)
+        l_outer, self.r_left = self.card(row, "Laptop and job", "monitor")
+        l_outer.pack(side="left", fill="both", expand=True, padx=self.px(5))
+        r_outer, self.r_right = self.card(row, "Results", "doc")
+        r_outer.pack(side="left", fill="both", expand=True, padx=self.px(5))
+        self.r_files = self.lbl(pg, "", 10, fg=MUTED, bg=BG, wraplength=900)
+        self.r_files.pack(fill="x", padx=self.px(30), pady=(0, 4))
         left, right, mid = self.bar(pg)
-        self.btn(left, "Power off", self.power_off, "ghost").pack()
-        self.btn(right, "Next laptop", self.next_laptop).pack()
+        self.btn(left, "Home", lambda: self.show("home"), "ghost").pack()
+        Pill(self, right, "Next laptop", self.next_laptop, width=230,
+             height=48, icon="play").pack()
 
-    def build_report_data(self):
-        chk = self.s.get("check") or {}
-        wipe = self.s.get("wipe") or {}
+    def collect_tests(self):
         tests = []
-        seen = set()
         for r in self.s["auto"]:
-            comp = r.get("component")
-            if comp in MANUAL:
+            if r.get("component") in MANUAL:
                 continue
             tests.append(r)
-            seen.add(comp)
         for comp in MANUAL:
             tests.append(self.s["manual"].get(comp) or {
                 "component": comp, "status": "WARN",
                 "notes": ["Not tested"], "details": {}})
+        return tests
+
+    def build_report_data(self):
+        chk = self.s.get("check") or {}
+        wipe = self.s.get("wipe") or {}
+        tests = self.collect_tests()
         i = self.ident
         stor = "; ".join("%s (%s) %s GB" % (d.get("model") or "Drive",
                                             d.get("drive_type", "?"),
@@ -1652,6 +2615,7 @@ class App:
         overall, reasons = compute_overall(self.s["wipe_state"],
                                            wipe.get("overall"), tests)
         er = chk.get("autopilot_result", "?")
+        obs = dict(self.read_observations())
         return {
             "tool": "laptop_window.py", "version": VERSION,
             "time": now().strftime("%Y-%m-%d %H:%M:%S") + " (Europe/Dublin)",
@@ -1673,13 +2637,18 @@ class App:
             "wipe_state": self.s["wipe_state"],
             "wipe_devices": wipe.get("devices") or [],
             "certificate": wipe.get("certificate_sha256", ""),
-            "tests": tests, "overall": overall, "reasons": reasons,
+            "tests": tests, "observations": obs,
+            "overall": overall, "reasons": reasons,
         }
 
     def finish(self):
         rep = self.build_report_data()
-        self.set_prog("Tests", "done", OK)
-        self.set_step(4)
+        obs = rep["observations"]
+        n_iss = len(obs.get("issues") or [])
+        self.set_stage("obs", "ok" if not n_iss else "warn",
+                       "Grade %s, %d issue%s" % (obs.get("grade") or "-",
+                                                 n_iss,
+                                                 "" if n_iss == 1 else "s"))
         self.show("report")
         bg, fg = {"PASS": (GREEN_BAN, NAVY), "FAIL": (RED_BAN, "white")}.get(
             rep["overall"], (WARN, NAVY))
@@ -1695,21 +2664,22 @@ class App:
                 ("RAM", ram_text(self.ram, short=True)),
                 ("Screen", rep["screen"])]
         for r, (k, v) in enumerate(left):
-            self.lbl(self.r_left, k, 10, fg=MUTED).grid(row=r, column=0,
-                                                        sticky="nw", padx=(0, 14),
-                                                        pady=2)
+            self.lbl(self.r_left, k, 10, fg=MUTED).grid(
+                row=r, column=0, sticky="nw", padx=(0, self.px(14)), pady=2)
             self.lbl(self.r_left, v, 11, True, wraplength=380).grid(
                 row=r, column=1, sticky="nw", pady=2)
         good = sum(1 for t in rep["tests"] if t.get("status") == "PASS")
         right = [("Absolute", rep["absolute"]), ("Enrolment", rep["enrolment"]),
                  ("Wipe", rep["wipe_state"]),
-                 ("Components", "%d of %d PASS" % (good, len(rep["tests"])))]
+                 ("Components", "%d of %d PASS" % (good, len(rep["tests"]))),
+                 ("Grade", obs.get("grade") or "-"),
+                 ("Issues", ", ".join(obs.get("issues") or []) or "none"),
+                 ("Photos", str(len(obs.get("photos") or [])))]
         for r, (k, v) in enumerate(right):
-            self.lbl(self.r_right, k, 10, fg=MUTED).grid(row=r, column=0,
-                                                         sticky="nw", padx=(0, 14),
-                                                         pady=2)
+            self.lbl(self.r_right, k, 10, fg=MUTED).grid(
+                row=r, column=0, sticky="nw", padx=(0, self.px(14)), pady=2)
             col = OK if v in ("CLEAR", "CLEAN", "WIPED") else TEXT
-            self.lbl(self.r_right, v, 11, True, fg=col).grid(
+            self.lbl(self.r_right, v, 11, True, fg=col, wraplength=360).grid(
                 row=r, column=1, sticky="nw", pady=2)
         saved = self.save_reports(rep)
         msg = "Saved: " + ", ".join(os.path.basename(p) for p in saved) + \
@@ -1719,12 +2689,27 @@ class App:
                     "ITAD_DATA stick and run again, or copy them before "
                     "powering off.")
         self.r_files.configure(text=msg, fg=MUTED if self.persistent else WARN)
-        self.set_prog("Report", "saved" if saved else "not saved",
-                      OK if saved else BAD)
+        has_pdf = any(p.endswith(".pdf") for p in saved)
+        self.set_stage("report", "ok" if has_pdf else (
+            "warn" if saved else "bad"),
+            "Saved TXT + PDF" if has_pdf else (
+                "Saved (no PDF)" if saved else "Not saved"))
 
     def save_reports(self, rep):
         base = "SN_" + safe_name(rep["serial"] if rep["serial"] != "UNKNOWN"
                                  else rep["asset_id"])
+        obs = rep["observations"]
+        copied = []
+        for n, src in enumerate(obs.get("photos") or [], start=1):
+            ext = os.path.splitext(src)[1].lower() or ".jpg"
+            dst = os.path.join(self.out_dir, "%s_photo%d%s" % (base, n, ext))
+            try:
+                if os.path.realpath(src) != os.path.realpath(dst):
+                    shutil.copyfile(src, dst)
+                copied.append(dst)
+            except Exception:
+                pass
+        obs["photo_files"] = copied
         saved = []
         for ext, fn in (("txt", lambda p: open(p, "w").write(render_txt(rep))),
                         ("json", lambda p: json.dump(rep, open(p, "w"),
@@ -1740,8 +2725,88 @@ class App:
                 pass
         return saved
 
+    # ---------- settings and about ----------
+    def build_settings(self):
+        tk = self.tk
+        pg = self.new_page("settings")
+        self.page_title(pg, "Settings")
+        row = tk.Frame(pg, bg=BG)
+        row.pack(fill="both", expand=True, padx=self.px(23))
+        s_outer, s = self.card(row, "Reports and accounts", "doc")
+        s_outer.pack(side="left", fill="both", expand=True, padx=self.px(5))
+        self.st_store = self.lbl(s, "", 11, wraplength=380)
+        self.st_store.pack(anchor="w")
+        self.lbl(s, "Plug in a USB stick named ITAD_DATA before booting to "
+                    "keep reports, photos and technician accounts.", 10,
+                 fg=MUTED, wraplength=380).pack(anchor="w",
+                                                pady=(self.px(10), 0))
+        t_outer, t = self.card(row, "Technicians", "user")
+        t_outer.pack(side="left", fill="both", expand=True, padx=self.px(5))
+        self.st_techs = self.lbl(t, "", 11, wraplength=360)
+        self.st_techs.pack(anchor="w", pady=(0, self.px(12)))
+        self.btn(t, "Add technician", self.add_tech_dialog,
+                 "outline").pack(anchor="w")
+        j_outer, j = self.card(row, "Job defaults", "gear")
+        j_outer.pack(side="left", fill="both", expand=True, padx=self.px(5))
+        self.lbl(j, "LOCATION", 9, True, fg=MUTED).pack(anchor="w")
+        self.ttk.Combobox(j, textvariable=self.v_loc, values=LOCATIONS,
+                          font=self.F(12)).pack(fill="x", pady=(2, self.px(14)))
+        self.lbl(j, "MODE", 9, True, fg=MUTED).pack(anchor="w")
+        mode = []
+        mode.append("Dry run (nothing erased)" if self.dry else
+                    "Normal (wipe is real)")
+        mode.append("Quick tests" if self.quick else "Full tests")
+        self.lbl(j, "\n".join(mode), 11).pack(anchor="w")
+        left, right, mid = self.bar(pg)
+        self.btn(left, "Home", lambda: self.show("home"), "ghost").pack()
+
+    def refresh_settings(self):
+        self.st_store.configure(
+            text=("Saved to the ITAD_DATA stick:\n%s" % self.out_dir)
+            if self.persistent else
+            ("No ITAD_DATA stick found.\nFiles go to %s and are lost at "
+             "power off." % self.out_dir),
+            fg=OK if self.persistent else WARN)
+        acc = load_accounts(self.out_dir)
+        ready = sorted(a["name"] for a in acc.values() if a["hash"])
+        nopw = sorted(a["name"] for a in acc.values() if not a["hash"])
+        txt = ("%d technician%s: %s" % (len(ready), "" if len(ready) == 1
+                                         else "s", ", ".join(ready))
+               if ready else "No technician accounts yet.")
+        if nopw:
+            txt += "\nNo password yet: " + ", ".join(nopw)
+        self.st_techs.configure(text=txt)
+
+    def build_about(self):
+        tk = self.tk
+        pg = self.new_page("about")
+        self.page_title(pg, "About")
+        o, b = self.card(pg, "ITAD Laptop v%s" % VERSION, "info")
+        o.pack(fill="x", padx=self.px(28))
+        lines = [
+            "Tests, wipes and certifies laptops so they can be reused.",
+            "",
+            "Order of work:  1 Check (Absolute lock, enrolment)  >  2 Wipe  "
+            ">  3 Component tests  >  4 Observations  >  5 Report",
+            "",
+            "Reports are named after the serial number and saved as TXT, "
+            "PDF, JSON and LOG.",
+            "Technician passwords are stored as salted PBKDF2-SHA256 hashes "
+            "only.",
+            "",
+            "Keys:  Esc = full screen on/off    Ctrl+Q = close the window",
+            "Boot mode: %s    Tools folder: %s" % (
+                self.ident.get("boot_mode") or "-", TOOLS_DIR),
+        ]
+        self.lbl(b, "\n".join(lines), 11, wraplength=900).pack(anchor="w")
+        left, right, mid = self.bar(pg)
+        self.btn(left, "Home", lambda: self.show("home"), "ghost").pack()
+
     # ---------- misc ----------
     def next_laptop(self):
+        if self.wiping:
+            self.mb.showinfo("Wipe running", "A wipe is running. Please wait.")
+            return
         # keeps ITAD_SIGNED_IN so the technician stays signed in
         os.execv(PY, [PY] + sys.argv)
 
@@ -1750,7 +2815,7 @@ class App:
             self.mb.showinfo("Wipe running", "A wipe is running. Do not power "
                              "off until it has finished.")
             return
-        if self.mb.askyesno("Power off", "Power off this laptop now?"):
+        if self.mb.askyesno("Shut down", "Shut down this laptop now?"):
             if subprocess.call(["systemctl", "poweroff"]) != 0:
                 subprocess.call(["poweroff"])
 
@@ -1763,7 +2828,7 @@ class App:
 
 
 def main():
-    ap = argparse.ArgumentParser(description="LaptopSeal window")
+    ap = argparse.ArgumentParser(description="ITAD Laptop window")
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--quick", action="store_true")
     ap.add_argument("--windowed", action="store_true")
@@ -1782,6 +2847,7 @@ def main():
         fallback_terminal("no screen session", args.dry_run)
     try:
         import tkinter as tk
+        import tkinter.font  # noqa: F401  (used for text sizes)
         from tkinter import messagebox, ttk
     except Exception as e:
         fallback_terminal("Tk is not installed: %s" % e, args.dry_run)
