@@ -48,7 +48,6 @@ convert -size 760x240 xc:none \
   -fill "#38bdf8" -pointsize 30 -annotate +0+80 "Laptop Test and Wipe" \
   "$THEME/logo.png"
 
-# --- FIXED: complete plymouth theme descriptor ---
 cat > "$THEME/itad.plymouth" <<'EOF'
 [Plymouth Theme]
 Name=ITAD
@@ -61,12 +60,9 @@ ScriptFile=/usr/share/plymouth/themes/itad/itad.script
 EOF
 
 cat > "$THEME/itad.script" <<'EOF'
-# Minimal plymouth script theme: logo centred on the background
 logo = Image("logo.png");
-
 screen_w = Window.GetWidth();
 screen_h = Window.GetHeight();
-
 sprite = Sprite(logo);
 sprite.SetX(screen_w / 2 - logo.GetWidth() / 2);
 sprite.SetY(screen_h / 2 - logo.GetHeight() / 2);
@@ -87,12 +83,68 @@ update-alternatives --set default.plymouth \
 EOF
 chmod +x "$HOOKS/0100-set-plymouth-theme.chroot"
 
+echo "== 4b. Setup auto-start for the ITAD tool (Openbox) =="
+AUTOSTART_DIR="$INC/etc/xdg/openbox"
+mkdir -p "$AUTOSTART_DIR"
+
+cat > "$AUTOSTART_DIR/autostart" <<'EOF'
+#!/bin/bash
+# Start the ITAD Laptop Tool automatically when the GUI loads.
+# IMPORTANT: Change '/usr/local/bin/your_tool.py' to the actual path of your app.
+python3 /usr/local/bin/your_tool.py &
+EOF
+chmod +x "$AUTOSTART_DIR/autostart"
+
+echo "== 4c. Auto-start Xorg on tty1 login =="
+USER_HOME="$INC/home/user"
+mkdir -p "$USER_HOME"
+
+# Tell startx to launch openbox-session
+cat > "$USER_HOME/.xinitrc" <<'EOF'
+#!/bin/sh
+exec openbox-session
+EOF
+chmod +x "$USER_HOME/.xinitrc"
+
+# Auto-run startx on tty1 login via bash_profile
+cat > "$USER_HOME/.bash_profile" <<'EOF'
+if [ -z "$DISPLAY" ] && [ "$(tty)" = "/dev/tty1" ]; then
+    exec startx
+fi
+EOF
+
+# Fix permissions so the live user owns their config files
+chroot "$INC" /bin/chown -R 1000:1000 /home/user || true
+
+echo "== 4d. Custom Openbox Menu =="
+OPENBOX_MENU="$INC/etc/xdg/openbox/menu.xml"
+mkdir -p "$(dirname "$OPENBOX_MENU")"
+cat > "$OPENBOX_MENU" <<'EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<openbox_menu xmlns="http://openbox.org/3.4/menu">
+<menu id="root-menu" label="Openbox 3">
+  <item label="Launch ITAD Tool">
+    <action name="Execute">
+      <command>python3 /usr/local/bin/your_tool.py</command>
+    </action>
+  </item>
+  <separator />
+  <item label="Terminal">
+    <action name="Execute">
+      <command>xterm</command>
+    </action>
+  </item>
+  <item label="Exit">
+    <action name="Exit" />
+  </item>
+</menu>
+</openbox_menu>
+EOF
+
 echo "== 5. Build =="
 lb build
 
-echo
 echo "== 6. Collect output =="
-# live-build produces live-image-amd64.hybrid.iso (or binary.hybrid.iso on older versions)
 ISO_IN="$(ls -1t live-image-*.hybrid.iso binary.hybrid.iso 2>/dev/null | head -n1 || true)"
 if [ -z "${ISO_IN:-}" ]; then
   echo "ERROR: lb build finished but no .hybrid.iso was produced" >&2
