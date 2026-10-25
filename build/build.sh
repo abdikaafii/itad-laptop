@@ -196,10 +196,9 @@ echo "== 4f. Hide Boot Menus (Syslinux & GRUB) =="
 SYS_CFG_DIR="$CFG/bootloaders/isolinux"
 mkdir -p "$SYS_CFG_DIR"
 
-# Replace the blue Debian splash images with solid black ones
-convert -size 640x480 xc:black "$SYS_CFG_DIR/splash.png"
-convert -size 800x600 xc:black "$SYS_CFG_DIR/splash800x600.png"
-convert -size 1024x768 xc:black "$SYS_CFG_DIR/splash1024x768.png"
+# FIXED: Generate an 8-bit indexed color PNG with 16 colors for Syslinux compatibility
+convert -size 640x480 xc:black -type Palette -colors 16 -depth 8 "$SYS_CFG_DIR/splash.png"
+convert -size 800x600 xc:black -type Palette -colors 16 -depth 8 "$SYS_CFG_DIR/splash800x600.png"
 
 # Bypass the graphical menu entirely and boot the default live entry instantly
 cat > "$SYS_CFG_DIR/isolinux.cfg" <<'EOF'
