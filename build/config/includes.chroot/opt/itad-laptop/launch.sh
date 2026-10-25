@@ -1,12 +1,11 @@
 #!/bin/bash
 # launch.sh - starts the ITAD laptop tool
-# Repo location: build/config/includes.chroot/opt/launch.sh
-# On the boot USB it lives at: /opt/launch.sh
-# Start it with:  bash /opt/launch.sh
+# On the boot USB it lives at: /opt/itad-laptop/launch.sh
+# Start it with:  /opt/itad-laptop/launch.sh
 
-APP_DIR="/opt"
+APP_DIR="/opt/itad-laptop"
 APP="$APP_DIR/itad_run.py"
-LOG="/var/log/itad-launch.log"
+LOG="/tmp/itad-launch.log"
 DATA_LABEL="ITAD_DATA"
 DATA_MNT="/mnt/itad"
 
@@ -29,7 +28,8 @@ if [ "${1:-}" = "--inner" ]; then
         else
             cd "$APP_DIR" || true
             log "starting itad_run.py"
-            python3 "$APP"
+            # Use sudo -E to keep DISPLAY and ITAD_DATA variables for the root process
+            sudo -E python3 "$APP"
             log "itad_run.py exited with code $?"
         fi
 
@@ -47,8 +47,8 @@ if [ "${1:-}" = "--inner" ]; then
         case "${choice,,}" in
             r) clear ;;
             s) clear; echo "Type 'exit' to come back to this menu."; bash ;;
-            b) sync; reboot ;;
-            p) sync; poweroff ;;
+            b) sync; sudo reboot ;;
+            p) sync; sudo poweroff ;;
             *) clear ;;
         esac
     done
@@ -58,17 +58,17 @@ fi
 # ------------------------------------------------------------
 # OUTER MODE: prepare the system, then open the window
 # ------------------------------------------------------------
-mkdir -p "$(dirname "$LOG")" 2>/dev/null
+touch "$LOG"
 log "launch.sh started"
 
 # 1. Never let the screen go blank or sleep
-setterm -blank 0 -powerdown 0 2>/dev/null || true
+sudo setterm -blank 0 -powerdown 0 2>/dev/null || true
 
 # 2. Find and mount the ITAD_DATA stick (for reports)
 dev="$(blkid -L "$DATA_LABEL" 2>/dev/null || true)"
 if [ -n "$dev" ]; then
-    mkdir -p "$DATA_MNT"
-    mountpoint -q "$DATA_MNT" || mount -o rw "$dev" "$DATA_MNT" 2>>"$LOG"
+    sudo mkdir -p "$DATA_MNT"
+    sudo mountpoint -q "$DATA_MNT" || sudo mount -o rw "$dev" "$DATA_MNT" 2>>"$LOG"
     export ITAD_DATA="$DATA_MNT"
     log "ITAD_DATA stick mounted from $dev"
 else
