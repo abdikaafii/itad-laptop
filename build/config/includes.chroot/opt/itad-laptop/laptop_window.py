@@ -283,6 +283,22 @@ def run_cmd(cmd, timeout=15):
         return 1, ""
 
 
+def unmute_audio():
+    """A fresh live boot often starts muted or at 0%. Turn the main
+    controls up and unmute them on every sound card before the tone."""
+    if not shutil.which("amixer"):
+        return
+    try:
+        with open("/proc/asound/cards") as f:
+            cards = re.findall(r"^\s*(\d+)\s*\[", f.read(), re.M)
+    except Exception:
+        cards = []
+    for c in cards or ["0"]:
+        for ctl in ("Master", "Speaker", "PCM", "Front"):
+            run_cmd(["amixer", "-q", "-c", c, "sset", ctl, "80%", "unmute"],
+                    timeout=5)
+
+
 def _size_to_gb(text):
     m = re.match(r"(\d+(?:\.\d+)?)\s*(KB|MB|GB|TB)", text or "", re.I)
     if not m:
@@ -519,8 +535,18 @@ def compute_overall(wipe_state, wipe_overall, tests):
     if wipe_state != "WIPED":
         reasons.append("Wipe not done (%s)" % wipe_state.lower())
     for t in tests:
-        if "Not tested" in (t.get("notes") or []):
+        notes = t.get("notes") or []
+        st = t.get("status")
+        if "Not tested" in notes:
             reasons.append("%s not tested" % t.get("component"))
+        elif st == "WARN":
+            # A warning (e.g. weak battery, SMART unreadable) must be
+            # looked at by a person: never report it as a clean PASS.
+            reasons.append("%s needs checking%s" % (
+                t.get("component"), (": " + notes[0][:70]) if notes else ""))
+        elif st not in ("PASS",):
+            reasons.append("%s not checked%s" % (
+                t.get("component"), (": " + notes[0][:70]) if notes else ""))
     if reasons:
         return "INCOMPLETE", reasons
     return "PASS", []
@@ -2414,13 +2440,16 @@ class App:
             if len(seen) >= len(cells):
                 self.finish_manual("Keyboard", "PASS",
                                    ["All %d keys pressed" % len(cells)])
-            elif len(seen) >= 10:
-                self.finish_manual("Keyboard", "PASS",
-                                   ["Partial test: %d of %d keys pressed"
-                                    % (len(seen), len(cells))])
             else:
+                # Not every key was pressed, so the keyboard is not proven.
+                missing = sorted(set(cells) - seen)
                 self.finish_manual("Keyboard", "WARN",
-                                   ["Only %d keys pressed" % len(seen)])
+                                   ["Partial test: %d of %d keys pressed. "
+                                    "Not pressed: %s" % (
+                                        len(seen), len(cells),
+                                        ", ".join(missing[:12])
+                                        + (" ..." if len(missing) > 12
+                                           else ""))])
 
         def failed():
             win.destroy()
@@ -2443,6 +2472,7 @@ class App:
                 self.q.put(lambda: self.finish_manual(
                     "Speakers", "WARN", ["speaker-test not installed"]))
                 return
+            unmute_audio()
             try:
                 subprocess.call(["speaker-test", "-t", "sine", "-f", "440",
                                  "-l", "1", "-c", "2"], timeout=15,
@@ -2601,10 +2631,19 @@ class App:
 
     def collect_tests(self):
         tests = []
+        got = set()
         for r in self.s["auto"]:
             if r.get("component") in MANUAL:
                 continue
             tests.append(r)
+            got.add(r.get("component"))
+        # An automatic test that gave no result (crash, stopped early)
+        # must show in the report, not silently disappear.
+        for comp in COMPONENTS:
+            if comp not in MANUAL and comp not in got:
+                tests.append({"component": comp, "status": "WARN",
+                              "notes": ["No result from the automatic test"],
+                              "details": {}})
         for comp in MANUAL:
             tests.append(self.s["manual"].get(comp) or {
                 "component": comp, "status": "WARN",
@@ -2661,7 +2700,11 @@ class App:
         bg, fg = {"PASS": (GREEN_BAN, NAVY), "FAIL": (RED_BAN, "white")}.get(
             rep["overall"], (WARN, NAVY))
         self.r_banner.configure(text=rep["overall"], bg=bg, fg=fg)
-        self.r_reasons.configure(text="  ".join("- " + r for r in rep["reasons"]))
+        # More reasons can now appear (warnings), so let the text wrap.
+        self.r_reasons.configure(
+            text="   ".join("- " + r for r in rep["reasons"]),
+            wraplength=max(self.px(400), self.root.winfo_width()
+                           - self.px(360)), justify="left", anchor="w")
         for frame in (self.r_left, self.r_right):
             for w in frame.winfo_children():
                 w.destroy()
@@ -2704,8 +2747,12 @@ class App:
                 "Saved (no PDF)" if saved else "Not saved"))
 
     def save_reports(self, rep):
-        base = "SN_" + safe_name(rep["serial"] if rep["serial"] != "UNKNOWN"
-                                 else rep["asset_id"])
+        # The date and time in the name keeps an earlier report of the
+        # same laptop (a re-test) instead of writing over it.
+        base = "SN_%s_%s" % (
+            safe_name(rep["serial"] if rep["serial"] != "UNKNOWN"
+                      else rep["asset_id"]),
+            now().strftime("%Y%m%d-%H%M%S"))
         obs = rep["observations"]
         copied = []
         for n, src in enumerate(obs.get("photos") or [], start=1):
