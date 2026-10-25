@@ -35,6 +35,10 @@ xinit
 openbox
 xterm
 python3
+sudo
+util-linux
+x11-xserver-utils
+unclutter
 EOF
 
 echo "== 3. Boot splash theme (logo) =="
@@ -90,31 +94,28 @@ mkdir -p "$AUTOSTART_DIR"
 cat > "$AUTOSTART_DIR/autostart" <<'EOF'
 #!/bin/bash
 # Start the ITAD Laptop Tool automatically when the GUI loads.
-# IMPORTANT: Change '/usr/local/bin/your_tool.py' to the actual path of your app.
-python3 /usr/local/bin/your_tool.py &
+/opt/itad-laptop/launch.sh &
 EOF
 chmod +x "$AUTOSTART_DIR/autostart"
 
 echo "== 4c. Auto-start Xorg on tty1 login =="
-USER_HOME="$INC/home/user"
-mkdir -p "$USER_HOME"
+# Using /etc/skel ensures the live user gets these files automatically on boot
+SKEL_DIR="$INC/etc/skel"
+mkdir -p "$SKEL_DIR"
 
 # Tell startx to launch openbox-session
-cat > "$USER_HOME/.xinitrc" <<'EOF'
+cat > "$SKEL_DIR/.xinitrc" <<'EOF'
 #!/bin/sh
 exec openbox-session
 EOF
-chmod +x "$USER_HOME/.xinitrc"
+chmod +x "$SKEL_DIR/.xinitrc"
 
 # Auto-run startx on tty1 login via bash_profile
-cat > "$USER_HOME/.bash_profile" <<'EOF'
+cat > "$SKEL_DIR/.bash_profile" <<'EOF'
 if [ -z "$DISPLAY" ] && [ "$(tty)" = "/dev/tty1" ]; then
     exec startx
 fi
 EOF
-
-# Fix permissions so the live user owns their config files
-chroot "$INC" /bin/chown -R 1000:1000 /home/user || true
 
 echo "== 4d. Custom Openbox Menu =="
 OPENBOX_MENU="$INC/etc/xdg/openbox/menu.xml"
@@ -125,7 +126,7 @@ cat > "$OPENBOX_MENU" <<'EOF'
 <menu id="root-menu" label="Openbox 3">
   <item label="Launch ITAD Tool">
     <action name="Execute">
-      <command>python3 /usr/local/bin/your_tool.py</command>
+      <command>/opt/itad-laptop/launch.sh</command>
     </action>
   </item>
   <separator />
@@ -140,6 +141,11 @@ cat > "$OPENBOX_MENU" <<'EOF'
 </menu>
 </openbox_menu>
 EOF
+
+echo "== 4e. Fix permissions for the ITAD tool =="
+# Ensure the scripts uploaded to GitHub are executable inside the ISO
+chmod +x "$INC/opt/itad-laptop/launch.sh" 2>/dev/null || true
+chmod +x "$INC/opt/itad-laptop/"*.py 2>/dev/null || true
 
 echo "== 5. Build =="
 lb build
