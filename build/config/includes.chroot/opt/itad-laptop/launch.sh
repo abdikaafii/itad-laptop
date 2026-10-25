@@ -1,7 +1,8 @@
 #!/bin/bash
-# launch.sh - starts the ITAD laptop tool
-# It finds its own folder automatically (works in /opt or /opt/itad-laptop).
-# New layout: starts laptop_window.py. If that fails, falls back to itad_run.py.
+# launch.sh - starts the ITAD laptop tool (LaptopSeal)
+# Finds its own folder automatically (works in /opt or /opt/itad-laptop).
+# 1) Tests that the new window can open. 2) Opens it.
+# 3) If it cannot open, shows the old text screen and says why.
 
 SELF="$(readlink -f "$0")"
 APP_DIR="$(dirname "$SELF")"
@@ -15,16 +16,30 @@ DATA_MNT="/mnt/itad"
 log() { echo "$(date '+%F %T') $*" >> "$LOG" 2>/dev/null; }
 
 # ------------------------------------------------------------
-# INNER MODE: old text screen (fallback), runs inside xterm
+# INNER MODE: menu / old text screen, runs inside xterm
+# Usage: launch.sh --inner [--menu]
+#   --menu = show the menu first (do not start the old tool)
 # ------------------------------------------------------------
 if [ "${1:-}" = "--inner" ]; then
     export TERM="${TERM:-xterm-256color}"
     clear
 
     CONTINUE_FLAG=""
+    SKIP_RUN="0"
+    [ "${2:-}" = "--menu" ] && SKIP_RUN="1"
 
     while true; do
-        if ! command -v python3 >/dev/null 2>&1; then
+        if [ -n "${WINDOW_PROBLEM:-}" ]; then
+            echo "NOTE: the new window did not start."
+            echo "Reason: $WINDOW_PROBLEM"
+            echo "More details: cat $WINLOG"
+            echo
+            WINDOW_PROBLEM=""
+        fi
+
+        if [ "$SKIP_RUN" = "1" ]; then
+            SKIP_RUN="0"
+        elif ! command -v python3 >/dev/null 2>&1; then
             echo "ERROR: python3 is not installed on this USB."
         elif [ ! -f "$APP" ]; then
             echo "ERROR: $APP not found."
@@ -41,21 +56,25 @@ if [ "${1:-}" = "--inner" ]; then
         echo "=============================================="
         echo "  ITAD tool has stopped. What now?"
         echo "=============================================="
-        echo "  [R] Run the tool again (Check -> Wipe -> Test)"
-        echo "  [C] CONTINUE anyway (Bypass Check, go to Wipe)"
+        echo "  [W] Open the new LaptopSeal window"
+        echo "  [R] Run the old text tool (Check -> Wipe -> Test)"
+        echo "  [C] CONTINUE anyway (old tool, bypass Check)"
         echo "  [S] Open a shell (for technicians)"
         echo "  [B] Reboot"
         echo "  [P] Power off"
         echo
-        read -r -n1 -p "  Choose R / C / S / B / P: " choice
+        read -r -n1 -p "  Choose W / R / C / S / B / P: " choice
         echo
         case "${choice,,}" in
+            w) cd "$APP_DIR" || true
+               sudo -E ITAD_DATA="$ITAD_DATA" python3 "$WINDOW" 2>&1 | tee "$WINLOG"
+               SKIP_RUN="1" ;;
             r) CONTINUE_FLAG=""; clear ;;
             c) CONTINUE_FLAG="--continue-on-blocked"; clear ;;
             s) clear; echo "Type 'exit' to come back to this menu."; bash ;;
             b) sync; sudo reboot ;;
             p) sync; sudo poweroff ;;
-            *) CONTINUE_FLAG=""; clear ;;
+            *) SKIP_RUN="1"; clear ;;
         esac
     done
     exit 0
@@ -65,6 +84,7 @@ fi
 # OUTER MODE: prepare the system, then open the tool
 # ------------------------------------------------------------
 touch "$LOG"
+: > "$WINLOG"
 log "launch.sh started from $APP_DIR"
 
 # 1. Never let the screen go blank or sleep
@@ -105,31 +125,49 @@ if command -v unclutter >/dev/null 2>&1; then
     unclutter -idle 0.5 -root >/dev/null 2>&1 &
 fi
 
-# 5. NEW LAYOUT: open the real window (laptop_window.py)
-if [ -n "${DISPLAY:-}" ] && [ -f "$WINDOW" ] && command -v python3 >/dev/null 2>&1 \
-   && command -v xset >/dev/null 2>&1 && xset q >/dev/null 2>&1; then
-    log "starting laptop_window.py on $DISPLAY"
-    cd "$APP_DIR" || true
-    sudo -E ITAD_DATA="$ITAD_DATA" DISPLAY="$DISPLAY" python3 "$WINDOW" >"$WINLOG" 2>&1
-    code=$?
-    log "laptop_window.py exited with code $code (details in $WINLOG)"
-    if [ "$code" -eq 0 ]; then
-        exit 0
-    fi
-    log "window failed, falling back to the old text screen"
-else
-    log "window not started (no screen, or $WINDOW missing), using old text screen"
+# 5. Test that the new window CAN open (before starting it)
+PROBLEM=""
+if [ -z "${DISPLAY:-}" ]; then
+    PROBLEM="no graphical screen found"
+elif ! command -v python3 >/dev/null 2>&1; then
+    PROBLEM="python3 is not installed"
+elif [ ! -f "$WINDOW" ]; then
+    PROBLEM="laptop_window.py not found in $APP_DIR"
+elif ! sudo -E python3 -c "import tkinter" >>"$WINLOG" 2>&1; then
+    PROBLEM="Tkinter is not installed (add python3-tk to the package list)"
+elif ! sudo -E DISPLAY="$DISPLAY" python3 -c "import tkinter; tkinter.Tk().destroy()" >>"$WINLOG" 2>&1; then
+    PROBLEM="Tkinter cannot open a window on screen $DISPLAY"
 fi
 
-# 6. FALLBACK: old text screen in a fullscreen xterm, or plain console
+# 6. Open the new window, or fall back
+if [ -z "$PROBLEM" ]; then
+    log "starting laptop_window.py on $DISPLAY"
+    cd "$APP_DIR" || true
+    sudo -E ITAD_DATA="$ITAD_DATA" DISPLAY="$DISPLAY" python3 "$WINDOW" >>"$WINLOG" 2>&1
+    code=$?
+    log "laptop_window.py exited with code $code (details in $WINLOG)"
+    if [ "$code" -ne 0 ]; then
+        export WINDOW_PROBLEM="the window stopped with an error (code $code)"
+    fi
+    # After the window closes: show the menu (not the old tool)
+    if command -v xterm >/dev/null 2>&1; then
+        exec xterm -fullscreen +sb -title "ITAD Laptop Tool" \
+            -fa "DejaVu Sans Mono" -fs 13 -bg "#050a14" -fg "#e6f1ff" \
+            -e bash "$SELF" --inner --menu
+    else
+        exec bash "$SELF" --inner --menu
+    fi
+fi
+
+# 7. FALLBACK: old text screen, and say why
+log "window not started: $PROBLEM"
+export WINDOW_PROBLEM="$PROBLEM"
 if [ -n "${DISPLAY:-}" ] && command -v xterm >/dev/null 2>&1 && xset q >/dev/null 2>&1; then
-    log "opening fullscreen xterm on $DISPLAY"
     exec xterm -fullscreen +sb \
         -title "ITAD Laptop Tool" \
         -fa "DejaVu Sans Mono" -fs 13 \
         -bg "#050a14" -fg "#e6f1ff" \
-        -e bash "$SELF" --inner
+        -e bash "$SELF" --inner --menu
 else
-    log "no graphical screen, running on the console"
-    exec bash "$SELF" --inner
+    exec bash "$SELF" --inner --menu
 fi
