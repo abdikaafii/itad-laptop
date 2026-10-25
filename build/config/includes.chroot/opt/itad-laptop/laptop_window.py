@@ -88,10 +88,16 @@ STD_RAM_GB = [1, 2, 3, 4, 6, 8, 12, 16, 20, 24, 32, 36, 40, 48, 64, 96, 128,
               192, 256]
 LOCATIONS = ["Warehouse DPA3 Test Bay 1", "Warehouse DPA3 Test Bay 2",
              "Warehouse DPA3 Test Bay 3", "Warehouse DPA3 Test Bay 4", "Other"]
-AUTO_TESTS = "cpu,ram,drive,battery,webcam,wifi,touchpad,usb"
+AUTO_TESTS = "cpu,ram,drive,battery,webcam,wifi,usb"
 COMPONENTS = ["CPU", "RAM", "Drive Health", "Battery", "Webcam", "Wi-Fi",
-              "Touchpad", "USB", "Screen", "Keyboard", "Speakers"]
-MANUAL = ["Screen", "Keyboard", "Speakers"]
+              "USB", "Screen", "Keyboard", "Touchpad", "Touchscreen",
+              "Speakers", "Microphone"]
+# On-screen tests the technician does (in button order)
+MANUAL = ["Screen", "Keyboard", "Touchpad", "Touchscreen", "Speakers",
+          "Microphone"]
+# "N/A" = the laptop does not have this part (e.g. no touchscreen).
+# It is not a problem and does not stop a PASS.
+NOT_FITTED = "N/A"
 BANNER_NAMES = {"CPU": "CPU", "RAM": "RAM", "DRIVE": "Drive Health",
                 "BATTERY": "Battery", "WEBCAM": "Webcam", "WIFI": "Wi-Fi",
                 "TOUCHPAD": "Touchpad", "USB": "USB"}
@@ -297,6 +303,77 @@ def unmute_audio():
         for ctl in ("Master", "Speaker", "PCM", "Front"):
             run_cmd(["amixer", "-q", "-c", c, "sset", ctl, "80%", "unmute"],
                     timeout=5)
+        # microphone side: turn recording on and up
+        for ctl in ("Capture", "Internal Mic", "Mic"):
+            run_cmd(["amixer", "-q", "-c", c, "sset", ctl, "80%", "cap"],
+                    timeout=5)
+
+
+def find_touchscreen():
+    """Returns the name of a touchscreen, or "" if the laptop has none.
+    A touchscreen is an input device marked INPUT_PROP_DIRECT (you touch
+    the picture itself), unlike a touchpad."""
+    for dev in sorted(glob.glob("/sys/class/input/event*/device")):
+        try:
+            with open(dev + "/properties") as f:
+                props = int(f.read().strip() or "0", 16)
+            with open(dev + "/name") as f:
+                name = f.read().strip()
+        except Exception:
+            continue
+        low = name.lower()
+        if "pen" in low or "stylus" in low:
+            continue
+        if props & 0x2:          # INPUT_PROP_DIRECT
+            return name
+    return ""
+
+
+def find_touchpad():
+    """Returns the touchpad's name, or "" if none is found."""
+    try:
+        with open("/proc/bus/input/devices") as f:
+            content = f.read()
+    except Exception:
+        return ""
+    for block in content.split("\n\n"):
+        low = block.lower()
+        if any(k in low for k in ("touchpad", "synaptics", "trackpad",
+                                   "alps", "elan")):
+            m = re.search(r'N: Name="([^"]+)"', block)
+            if m and "touchscreen" not in m.group(1).lower():
+                return m.group(1)
+    return ""
+
+
+def capture_devices():
+    """Recording devices to try: the default first, then each card."""
+    devs = ["default"]
+    rc, out = run_cmd(["arecord", "-l"], timeout=5)
+    for card, dev in re.findall(r"card (\d+):.*?device (\d+):", out or ""):
+        devs.append("plughw:%s,%s" % (card, dev))
+    return devs
+
+
+def wav_level(path):
+    """Loudest sample of a 16-bit WAV file, from 0.0 (silence) to 1.0."""
+    import array
+    import wave
+    try:
+        with wave.open(path, "rb") as w:
+            if w.getsampwidth() != 2:
+                return 0.0
+            data = array.array("h", w.readframes(w.getnframes()))
+    except Exception:
+        return 0.0
+    if not data:
+        return 0.0
+    if sys.byteorder == "big":
+        data.byteswap()
+    # skip the first 0.2 s: some microphones click when they switch on
+    skip = min(len(data) // 4, 8820)
+    peak = max(abs(x) for x in data[skip:]) if len(data) > skip else 0
+    return peak / 32768.0
 
 
 def _size_to_gb(text):
@@ -544,7 +621,7 @@ def compute_overall(wipe_state, wipe_overall, tests):
             # looked at by a person: never report it as a clean PASS.
             reasons.append("%s needs checking%s" % (
                 t.get("component"), (": " + notes[0][:70]) if notes else ""))
-        elif st not in ("PASS",):
+        elif st not in ("PASS", NOT_FITTED):
             reasons.append("%s not checked%s" % (
                 t.get("component"), (": " + notes[0][:70]) if notes else ""))
     if reasons:
@@ -2129,7 +2206,10 @@ class App:
                   pady=(self.px(14), 0))
         for comp, fn in (("Screen", self.manual_screen),
                          ("Keyboard", self.manual_keyboard),
-                         ("Speakers", self.manual_speakers)):
+                         ("Touchpad", self.manual_touchpad),
+                         ("Touchscreen", self.manual_touchscreen),
+                         ("Speakers", self.manual_speakers),
+                         ("Microphone", self.manual_microphone)):
             b = self.btn(mrow, comp + " test", fn, "ghost")
             b.configure(state="disabled")
             b.pack(side="left", padx=(0, self.px(8)))
@@ -2150,7 +2230,8 @@ class App:
             return
         text = {"RUN": "running...", "WAIT": "waiting", "DONE": "done",
                 "PASS": "PASS", "WARN": "WARN", "FAIL": "FAIL",
-                "SKIP": "skipped"}.get(status, status)
+                "SKIP": "skipped", NOT_FITTED: "not fitted"}.get(status,
+                                                                 status)
         color = {"RUN": CYAN, "PASS": OK, "WARN": WARN,
                  "FAIL": BAD}.get(status, MUTED)
         lab.configure(text=text, fg=color)
@@ -2327,16 +2408,24 @@ class App:
             if comp not in MANUAL and comp not in got:
                 self.set_row(comp, "WARN")
         self.w_status.configure(text="")
+        # No touchscreen on this laptop: nothing to test, mark it N/A.
+        if not find_touchscreen():
+            self.finish_manual("Touchscreen", NOT_FITTED,
+                               ["No touchscreen on this laptop"])
+        todo = [c for c in MANUAL if c not in self.s["manual"]]
         self.t_status.configure(
-            text="Automatic tests finished. Now run the 3 on-screen tests.",
-            fg=TEXT)
+            text="Automatic tests finished. Now run the %d on-screen tests."
+                 % len(todo), fg=TEXT)
         self.set_stage("test", "warn", "Now run the on-screen tests")
         for comp, b in self.manual_btns.items():
-            b.configure(state="normal")
+            b.configure(state="disabled" if self.s["manual"].get(comp, {})
+                        .get("status") == NOT_FITTED else "normal")
         self.w_next.configure(state="normal")
 
     def test_summary(self):
-        tests = self.collect_tests()
+        # parts the laptop does not have (N/A) are left out of the count
+        tests = [t for t in self.collect_tests()
+                 if t.get("status") != NOT_FITTED]
         good = sum(1 for t in tests if t.get("status") == "PASS")
         bad = sum(1 for t in tests if t.get("status") == "FAIL")
         state = "bad" if bad else ("ok" if good == len(tests) else "warn")
@@ -2489,6 +2578,266 @@ class App:
             else:
                 self.finish_manual("Speakers", "FAIL", ["No sound heard"])
         self.set_row("Speakers", "RUN")
+        threading.Thread(target=work, daemon=True).start()
+
+    def _test_window(self, title, lines):
+        """Full-screen test window with a title and help text at the top
+        and a button row at the bottom. Returns (win, canvas, info, btns)."""
+        tk = self.tk
+        win = tk.Toplevel(self.root)
+        win.title(title)
+        win.configure(bg=NAVY)
+        # fill the whole screen, even if the window manager ignores
+        # the fullscreen request
+        win.geometry("%dx%d+0+0" % (win.winfo_screenwidth(),
+                                    win.winfo_screenheight()))
+        try:
+            win.attributes("-fullscreen", True)
+        except Exception:
+            pass
+        tk.Label(win, text=title, font=self.F(16, True), fg=TEXT,
+                 bg=NAVY).pack(pady=(self.px(14), self.px(4)))
+        for ln in lines:
+            tk.Label(win, text=ln, font=self.F(11), fg=MUTED,
+                     bg=NAVY).pack()
+        info = tk.Label(win, text="", font=self.F(12, True), fg=CYAN,
+                        bg=NAVY)
+        info.pack(pady=(self.px(6), self.px(6)))
+        btns = tk.Frame(win, bg=NAVY)
+        btns.pack(side="bottom", pady=self.px(12))
+        canvas = tk.Canvas(win, bg=BG, highlightthickness=0)
+        canvas.pack(fill="both", expand=True, padx=self.px(20))
+        return win, canvas, info, btns
+
+    def manual_touchpad(self):
+        win, c, info, btns = self._test_window(
+            "Touchpad test",
+            ["Move over every box, then left click and right click."])
+        cols, rows = 8, 5
+        st = {"cells": set(), "left": False, "right": False, "scroll": False,
+              "done": False}
+
+        def draw(_e=None):
+            c.delete("all")
+            w, h = max(c.winfo_width(), 1), max(c.winfo_height(), 1)
+            for i in range(cols):
+                for j in range(rows):
+                    x1, y1 = i * w / cols, j * h / rows
+                    on = (i, j) in st["cells"]
+                    c.create_rectangle(x1 + 2, y1 + 2, x1 + w / cols - 2,
+                                       y1 + h / rows - 2,
+                                       fill=OK if on else NAVY,
+                                       outline=BORDER)
+            update()
+
+        def update():
+            info.configure(text="%d / %d      Left click: %s      Right click: %s"
+                                % (len(st["cells"]), cols * rows,
+                                   "OK" if st["left"] else "-",
+                                   "OK" if st["right"] else "-"))
+
+        def motion(e):
+            w, h = max(c.winfo_width(), 1), max(c.winfo_height(), 1)
+            cell = (min(cols - 1, max(0, int(e.x * cols / w))),
+                    min(rows - 1, max(0, int(e.y * rows / h))))
+            if cell not in st["cells"]:
+                st["cells"].add(cell)
+                draw()
+
+        def click(e, which):
+            motion(e)
+            st[which] = True
+            update()
+
+        def scroll(_e):
+            st["scroll"] = True
+
+        def result(faulty):
+            if st["done"]:
+                return
+            st["done"] = True
+            win.destroy()
+            total = cols * rows
+            missing = []
+            if len(st["cells"]) < total:
+                missing.append("%d of %d areas not reached"
+                               % (total - len(st["cells"]), total))
+            if not st["left"]:
+                missing.append("left click not seen")
+            if not st["right"]:
+                missing.append("right click not seen")
+            if faulty:
+                self.finish_manual("Touchpad", "FAIL",
+                                   ["Technician reported a fault"
+                                    + ("; " + "; ".join(missing)
+                                       if missing else "")])
+            elif missing:
+                self.finish_manual("Touchpad", "WARN",
+                                   ["Partial test: " + "; ".join(missing)])
+            else:
+                self.finish_manual("Touchpad", "PASS",
+                                   ["Whole pad, left and right click OK"
+                                    + (", scroll OK" if st["scroll"] else "")])
+
+        c.bind("<Configure>", draw)
+        c.bind("<Motion>", motion)
+        c.bind("<Button-1>", lambda e: click(e, "left"))
+        c.bind("<Button-3>", lambda e: click(e, "right"))
+        for ev in ("<Button-4>", "<Button-5>", "<MouseWheel>"):
+            c.bind(ev, scroll)
+        self.btn(btns, "Done", lambda: result(False)).pack(side="left",
+                                                           padx=6)
+        self.btn(btns, "Touchpad faulty", lambda: result(True),
+                 "danger").pack(side="left", padx=6)
+        win.bind("<Escape>", lambda e: result(False))
+        self.set_row("Touchpad", "RUN")
+        win.focus_force()
+
+    def manual_touchscreen(self):
+        name = find_touchscreen()
+        if not name:
+            self.finish_manual("Touchscreen", NOT_FITTED,
+                               ["No touchscreen on this laptop"])
+            b = self.manual_btns.get("Touchscreen")
+            if b:
+                b.configure(state="disabled")
+            self.mb.showinfo("Touchscreen", "No touchscreen was found on "
+                             "this laptop, so there is nothing to test.")
+            return
+        win, c, info, btns = self._test_window(
+            "Touchscreen test",
+            ["Touch every circle with your finger."])
+        cols, rows = 4, 3
+        st = {"hit": set(), "done": False, "pts": {}}
+
+        def draw(_e=None):
+            c.delete("all")
+            w, h = max(c.winfo_width(), 1), max(c.winfo_height(), 1)
+            r = max(18, min(w / cols, h / rows) * 0.22)
+            st["r"] = r
+            # circles near the edges and corners as well as the middle
+            for i in range(cols):
+                for j in range(rows):
+                    x = r + 6 + i * (w - 2 * r - 12) / (cols - 1)
+                    y = r + 6 + j * (h - 2 * r - 12) / (rows - 1)
+                    st["pts"][(i, j)] = (x, y)
+                    on = (i, j) in st["hit"]
+                    c.create_oval(x - r, y - r, x + r, y + r,
+                                  fill=OK if on else NAVY,
+                                  outline=CYAN, width=3)
+            info.configure(text="%d / %d" % (len(st["hit"]), cols * rows))
+
+        def touch(e):
+            r = st.get("r", 30)
+            for key, (x, y) in st["pts"].items():
+                if (e.x - x) ** 2 + (e.y - y) ** 2 <= (r * 1.2) ** 2:
+                    if key not in st["hit"]:
+                        st["hit"].add(key)
+                        draw()
+                        if len(st["hit"]) == cols * rows:
+                            win.after(500, lambda: result(False))
+
+        def result(faulty):
+            if st["done"]:
+                return
+            st["done"] = True
+            win.destroy()
+            total = cols * rows
+            got = len(st["hit"])
+            if faulty:
+                self.finish_manual("Touchscreen", "FAIL",
+                                   ["Technician reported a fault; %d of %d "
+                                    "points touched" % (got, total)])
+            elif got < total:
+                self.finish_manual("Touchscreen", "WARN",
+                                   ["Partial test: %d of %d points touched"
+                                    % (got, total)])
+            else:
+                self.finish_manual("Touchscreen", "PASS",
+                                   ["All %d points touched" % total])
+
+        c.bind("<Configure>", draw)
+        c.bind("<Button-1>", touch)
+        c.bind("<B1-Motion>", touch)
+        self.btn(btns, "Done", lambda: result(False)).pack(side="left",
+                                                           padx=6)
+        self.btn(btns, "Touchscreen faulty", lambda: result(True),
+                 "danger").pack(side="left", padx=6)
+        win.bind("<Escape>", lambda e: result(False))
+        self.set_row("Touchscreen", "RUN")
+        win.focus_force()
+
+    def manual_microphone(self):
+        if not shutil.which("arecord"):
+            self.finish_manual("Microphone", "WARN",
+                               ["arecord not installed (alsa-utils)"])
+            return
+        if not self.mb.askokcancel(
+                "Microphone", "Press OK, then talk for 4 seconds."):
+            return
+        self.set_row("Microphone", "RUN")
+        self.t_status.configure(text="Recording... talk or clap now "
+                                     "(4 seconds)", fg=CYAN)
+
+        def work():
+            unmute_audio()
+            # Record from every recording device at the same time, so the
+            # technician only has to talk once. Keep the loudest.
+            procs = []
+            for n, dev in enumerate(capture_devices()[:6]):
+                path = "/tmp/itad_mic_%d.wav" % n
+                try:
+                    p = subprocess.Popen(
+                        ["arecord", "-q", "-D", dev, "-d", "4", "-f",
+                         "S16_LE", "-r", "44100", "-c", "1", path],
+                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    procs.append((p, dev, path))
+                except Exception:
+                    pass
+            for p, _, _ in procs:
+                try:
+                    p.wait(timeout=10)
+                except Exception:
+                    p.kill()
+            best, best_dev, best_path = 0.0, "", ""
+            for _, dev, path in procs:
+                lvl = wav_level(path)
+                if lvl > best:
+                    best, best_dev, best_path = lvl, dev, path
+            if best >= 0.03 and shutil.which("aplay"):
+                self.q.put(lambda: self.t_status.configure(
+                    text="Playing the recording back...", fg=CYAN))
+                try:
+                    subprocess.call(["aplay", "-q", best_path], timeout=10,
+                                    stdout=subprocess.DEVNULL,
+                                    stderr=subprocess.DEVNULL)
+                except Exception:
+                    pass
+            for _, _, path in procs:
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
+            self.q.put(lambda: ask(best, best_dev))
+
+        def ask(level, dev):
+            self.t_status.configure(text="", fg=TEXT)
+            pct = int(round(level * 100))
+            if level < 0.03:
+                self.finish_manual("Microphone", "FAIL",
+                                   ["No sound picked up (level %d%%)" % pct])
+                self.mb.showwarning("Microphone", "The microphone picked "
+                                    "up no sound (level %d%%)." % pct)
+                return
+            if self.mb.askyesno("Microphone", "Sound level %d%%.\n\nDid you "
+                                "hear your recording clearly?" % pct):
+                self.finish_manual("Microphone", "PASS",
+                                   ["Recording heard, level %d%% (%s)"
+                                    % (pct, dev)])
+            else:
+                self.finish_manual("Microphone", "FAIL",
+                                   ["Recording not clear, level %d%% (%s)"
+                                    % (pct, dev)])
         threading.Thread(target=work, daemon=True).start()
 
     # ---------- observations ----------
@@ -2700,11 +3049,11 @@ class App:
         bg, fg = {"PASS": (GREEN_BAN, NAVY), "FAIL": (RED_BAN, "white")}.get(
             rep["overall"], (WARN, NAVY))
         self.r_banner.configure(text=rep["overall"], bg=bg, fg=fg)
-        # More reasons can now appear (warnings), so let the text wrap.
-        self.r_reasons.configure(
-            text="   ".join("- " + r for r in rep["reasons"]),
-            wraplength=max(self.px(400), self.root.winfo_width()
-                           - self.px(360)), justify="left", anchor="w")
+        # Short reasons on screen; the full detail is in the TXT/PDF report.
+        short = [r.split(":")[0] for r in rep["reasons"]]
+        if len(short) > 4:
+            short = short[:3] + ["+%d more (see report)" % (len(short) - 3)]
+        self.r_reasons.configure(text="     ".join(short), anchor="w")
         for frame in (self.r_left, self.r_right):
             for w in frame.winfo_children():
                 w.destroy()
@@ -2720,9 +3069,10 @@ class App:
             self.lbl(self.r_left, v, 11, True, wraplength=380).grid(
                 row=r, column=1, sticky="nw", pady=2)
         good = sum(1 for t in rep["tests"] if t.get("status") == "PASS")
+        fitted = sum(1 for t in rep["tests"] if t.get("status") != NOT_FITTED)
         right = [("Absolute", rep["absolute"]), ("Enrolment", rep["enrolment"]),
                  ("Wipe", rep["wipe_state"]),
-                 ("Components", "%d of %d PASS" % (good, len(rep["tests"]))),
+                 ("Components", "%d of %d PASS" % (good, fitted)),
                  ("Grade", obs.get("grade") or "-"),
                  ("Issues", ", ".join(obs.get("issues") or []) or "none"),
                  ("Photos", str(len(obs.get("photos") or [])))]
@@ -2733,13 +3083,17 @@ class App:
             self.lbl(self.r_right, v, 11, True, fg=col, wraplength=360).grid(
                 row=r, column=1, sticky="nw", pady=2)
         saved = self.save_reports(rep)
-        msg = "Saved: " + ", ".join(os.path.basename(p) for p in saved) + \
-              "   in   " + self.out_dir
-        if not self.persistent:
-            msg += ("\nWARNING: these files are only in memory. Plug in the "
-                    "ITAD_DATA stick and run again, or copy them before "
-                    "powering off.")
-        self.r_files.configure(text=msg, fg=MUTED if self.persistent else WARN)
+        kinds = ", ".join(os.path.splitext(p)[1][1:].upper() for p in saved
+                          if not p.endswith((".json", ".log")))
+        if not saved:
+            msg = "Report NOT saved"
+        elif self.persistent:
+            msg = "Report saved (%s)" % kinds
+        else:
+            msg = ("Report saved to memory only - copy it before "
+                   "powering off (no ITAD_DATA stick)")
+        self.r_files.configure(text=msg, fg=BAD if not saved else (
+            MUTED if self.persistent else WARN))
         has_pdf = any(p.endswith(".pdf") for p in saved)
         self.set_stage("report", "ok" if has_pdf else (
             "warn" if saved else "bad"),
