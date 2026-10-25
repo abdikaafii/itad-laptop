@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-itad_run.py - run the full ITAD pipeline in one go (v1.0.1)
+itad_run.py - run the full ITAD pipeline in one go (v1.0.2)
 
 Runs, in this order:
   1. laptop_check.py  (read-only)   -> laptop_check.json
@@ -58,12 +58,19 @@ def _verify_environment():
 
 
 def main():
+    # --- FIXED: Check ITAD_DATA first (USB stick), then /tmp, then ~/itad-reports ---
+    default_out = os.environ.get("ITAD_DATA")
+    if not default_out or not os.path.isdir(default_out) or not os.access(default_out, os.W_OK):
+        default_out = "/tmp/itad-reports"
+        os.makedirs(default_out, exist_ok=True)
+        if not os.access(default_out, os.W_OK):
+            default_out = os.path.expanduser("~/itad-reports")
+
     ap = argparse.ArgumentParser(description="ITAD full pipeline")
     ap.add_argument("--job-id", default="")
     ap.add_argument("--asset-id", default="")
     ap.add_argument("--tech", default="")
-    # Changed default out-dir to home folder so it persists across reboots
-    ap.add_argument("--out-dir", default=os.path.expanduser("~/itad-reports"))
+    ap.add_argument("--out-dir", default=default_out)
     ap.add_argument("--method", default="auto",
                     choices=["auto", "clear", "random", "dod",
                              "purge", "crypto", "discard"])
