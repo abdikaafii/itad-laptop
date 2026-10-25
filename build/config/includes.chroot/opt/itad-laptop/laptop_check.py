@@ -1,8 +1,15 @@
 #!/usr/bin/env python3
 """
-laptop_check.py - ITAD pre-wipe check (v3.1.6)  MULTI-PLATFORM
+laptop_check.py - ITAD pre-wipe check (v3.1.7)  MULTI-PLATFORM
 READ ONLY. Never wipes or writes to any internal drive.
 
+v3.1.7: Safety: ANY USB or removable drive is now excluded from the
+        "internal drives" list, whatever its size (before, USB sticks of
+        32 GB or more, such as a big ITAD_DATA stick, were treated as
+        internal). Drives holding the boot stick or the ITAD_DATA stick
+        (mounted in /mnt/itad or /media, or labelled ITAD_*) are excluded
+        too. The spinner only runs when colours are on, so the window
+        log is no longer flooded with spinner frames.
 v3.1.6: Unknown platform can no longer end as CLEAR when nothing was
         inspected. Safer reading of the lsblk "removable" flag.
 v3.1.5: Empty folders no longer count as evidence (false-positive fix).
@@ -22,7 +29,7 @@ try:
 except Exception:
     NOW = datetime.now()
 
-VERSION = "3.1.6"
+VERSION = "3.1.7"
 
 BAD_SERIALS = {
     "", "none", "default string", "to be filled by o.e.m.",
@@ -117,8 +124,15 @@ LINUX_ABSOLUTE_PATHS = ["opt/absolute", "usr/local/absolute",
                         "etc/absolute", "var/lib/absolute"]
 
 ENCRYPTED_FS = {"bitlocker", "crypto_luks", "filevault"}
+
+# Anything mounted under one of these belongs to the boot stick or to the
+# ITAD_DATA stick, so the disk that holds it is NEVER an internal drive.
 LIVE_MOUNT_PREFIXES = ("/run/live", "/usr/lib/live", "/rofs", "/cdrom",
-                       "/lib/live", "/live")
+                       "/lib/live", "/live",
+                       "/mnt/itad", "/mnt/ITAD_DATA", "/media")
+
+# Volume labels of our own USB sticks.
+ITAD_LABEL_PREFIX = "ITAD_"
 
 VERBOSE = False
 
@@ -339,7 +353,10 @@ class Step:
         self.t0 = time.time()
         self._stop = threading.Event()
         self._th = None
-        if LIVE:
+        # The spinner redraws the line many times a second. Only run it
+        # when colours are on (a real terminal). With --no-color (the
+        # LaptopSeal window) it would flood the log with frames.
+        if LIVE and USE_COLOR:
             self._th = threading.Thread(target=self._spin, daemon=True)
             self._th.start()
 
@@ -620,10 +637,24 @@ def _has_live_mount(node):
     return any(_has_live_mount(c) for c in (node.get("children") or []))
 
 
+def _has_itad_label(node):
+    """True if this disk, or any partition on it, is one of our sticks."""
+    lab = (node.get("label") or "").strip().upper()
+    if lab.startswith(ITAD_LABEL_PREFIX):
+        return True
+    return any(_has_itad_label(c) for c in (node.get("children") or []))
+
+
 def scan_disks():
-    # ROTA is used to detect SSD vs HDD
+    # ROTA is used to detect SSD vs HDD. LABEL is used to spot our own sticks.
     rc, out, _ = run(["lsblk", "-J", "-b", "-o",
-                      "NAME,PATH,TYPE,FSTYPE,SIZE,RM,TRAN,MODEL,MOUNTPOINT,ROTA"])
+                      "NAME,PATH,TYPE,FSTYPE,SIZE,RM,TRAN,MODEL,MOUNTPOINT,"
+                      "ROTA,LABEL"])
+    if rc != 0:
+        # Older lsblk without the LABEL column: try again without it.
+        rc, out, _ = run(["lsblk", "-J", "-b", "-o",
+                          "NAME,PATH,TYPE,FSTYPE,SIZE,RM,TRAN,MODEL,"
+                          "MOUNTPOINT,ROTA"])
     internal, parts, notes = [], [], []
     if rc != 0:
         notes.append("lsblk failed")
@@ -641,9 +672,14 @@ def scan_disks():
             return True
         if disk.get("path") == boot:
             return True
-        if (_truthy(disk.get("rm")) or disk.get("tran") == "usb"):
-            if int(disk.get("size") or 0) < 32_000_000_000:
-                return True
+        # v3.1.7: a USB or removable drive is never the laptop's own drive,
+        # whatever its size. (This fails safe: if a real internal drive is
+        # ever flagged removable, the tool says "no internal drive".)
+        if _truthy(disk.get("rm")) or disk.get("tran") == "usb":
+            return True
+        # the boot stick / the ITAD_DATA stick
+        if _has_itad_label(disk):
+            return True
         return _has_live_mount(disk)
 
     def _walk(n):
