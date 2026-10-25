@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-itad_run.py - run the full ITAD pipeline in one go (v1.0.2)
+itad_run.py - run the full ITAD pipeline in one go (v1.0.3)
 
 Runs, in this order:
   1. laptop_check.py  (read-only)   -> laptop_check.json
@@ -9,20 +9,13 @@ Runs, in this order:
 
 Stops on BLOCKED at step 1 (override with --continue-on-blocked).
 Wipe step asks for its own confirmation unless --yes-i-mean-it.
-
-Exit codes:
-  0 = every stage passed
-  1 = at least one stage FAILED
-  2 = at least one stage WARN / partial
-  3 = not root
-  4 = aborted by user
-  5 = check stage reported BLOCKED
 """
 import argparse
 import json
 import os
 import subprocess
 import sys
+from datetime import datetime
 
 TOOLS_DIR = os.path.dirname(os.path.abspath(__file__))
 CHECK = os.path.join(TOOLS_DIR, "laptop_check.py")
@@ -37,7 +30,6 @@ def _run_tool(path, args):
     print(BANNER)
     print("RUN:", os.path.basename(path), " ".join(args))
     print(BANNER)
-    # Using subprocess.call ensures it waits and passes back the exact exit code
     return subprocess.call([sys.executable, path] + args)
 
 
@@ -58,7 +50,10 @@ def _verify_environment():
 
 
 def main():
-    # --- FIXED: Check ITAD_DATA first (USB stick), then /tmp, then ~/itad-reports ---
+    # Auto-generate Job ID based on current time if not provided
+    default_job = "JOB-" + datetime.now().strftime("%Y%m%d-%H%M%S")
+
+    # Check ITAD_DATA first (USB stick), then /tmp, then ~/itad-reports
     default_out = os.environ.get("ITAD_DATA")
     if not default_out or not os.path.isdir(default_out) or not os.access(default_out, os.W_OK):
         default_out = "/tmp/itad-reports"
@@ -67,9 +62,9 @@ def main():
             default_out = os.path.expanduser("~/itad-reports")
 
     ap = argparse.ArgumentParser(description="ITAD full pipeline")
-    ap.add_argument("--job-id", default="")
-    ap.add_argument("--asset-id", default="")
-    ap.add_argument("--tech", default="")
+    ap.add_argument("--job-id", default=default_job)
+    ap.add_argument("--asset-id", default="AUTO")
+    ap.add_argument("--tech", default="AUTO")
     ap.add_argument("--out-dir", default=default_out)
     ap.add_argument("--method", default="auto",
                     choices=["auto", "clear", "random", "dod",
@@ -91,7 +86,6 @@ def main():
 
     _verify_environment()
     
-    # Ensure output directory exists and is writable
     try:
         os.makedirs(args.out_dir, exist_ok=True)
         test_file = os.path.join(args.out_dir, ".write_test")
