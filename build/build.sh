@@ -45,6 +45,15 @@ ntfs-3g
 alsa-utils
 network-manager
 smartmontools
+dmidecode
+hdparm
+nvme-cli
+pciutils
+usbutils
+lshw
+v4l-utils
+iw
+rfkill
 EOF
 
 echo "== 3. Boot splash theme =="
@@ -99,6 +108,26 @@ mkdir -p "$SUDOERS_DIR"
 echo "user ALL=(ALL) NOPASSWD: ALL" > "$SUDOERS_DIR/live-nopasswd"
 chmod 0440 "$SUDOERS_DIR/live-nopasswd"
 
+echo "== 4a2. Put the tool files in /opt/itad-laptop =="
+# The files may sit directly in includes.chroot/opt (GitHub folder "opt").
+# The USB looks for them in /opt/itad-laptop, so copy them there.
+mkdir -p "$INC/opt/itad-laptop"
+for f in "$INC"/opt/*.py "$INC"/opt/*.sh "$INC"/opt/*.md \
+         "$INC"/opt/*.png "$INC"/opt/*.gif "$INC"/opt/*.svg \
+         "$INC"/opt/*.txt; do
+  if [ -f "$f" ]; then
+    cp -f "$f" "$INC/opt/itad-laptop/"
+  fi
+done
+echo "Files that will be on the USB in /opt/itad-laptop:"
+ls -1 "$INC/opt/itad-laptop"
+for need in laptop_window.py laptop_check.py laptop_wipe.py laptop_test.py itad_run.py launch.sh; do
+  if [ ! -f "$INC/opt/itad-laptop/$need" ]; then
+    echo "ERROR: $need is missing from build/config/includes.chroot/opt" >&2
+    exit 1
+  fi
+done
+
 echo "== 4b. Setup auto-start for the ITAD GUI =="
 AUTOSTART_DIR="$INC/etc/xdg/openbox"
 mkdir -p "$AUTOSTART_DIR"
@@ -107,8 +136,9 @@ cat > "$AUTOSTART_DIR/autostart" <<'EOF'
 #!/bin/bash
 # Allow root (sudo) to draw windows on the screen
 xhost +local:root > /dev/null 2>&1
-# Start the GUI (without -E so it runs as root with the xhost permission)
-sudo python3 /opt/itad-laptop/laptop_test.py > /tmp/gui.log 2>&1 &
+# Start LaptopSeal through launch.sh (opens laptop_window.py,
+# and shows the reason on screen if the window cannot open)
+/opt/itad-laptop/launch.sh > /tmp/launch-out.log 2>&1 &
 EOF
 chmod +x "$AUTOSTART_DIR/autostart"
 
@@ -149,17 +179,22 @@ cat > "$OPENBOX_MENU" <<'EOF'
 <?xml version="1.0" encoding="UTF-8"?>
 <openbox_menu xmlns="http://openbox.org/3.4/menu">
 <menu id="root-menu" label="Openbox 3">
-  <item label="Launch ITAD GUI (LaptopSeal)">
-    <action name="Execute">
-      <command>sudo python3 /opt/itad-laptop/laptop_test.py</command>
-    </action>
-  </item>
-  <item label="Launch ITAD Terminal Pipeline">
+  <item label="Launch LaptopSeal (window)">
     <action name="Execute">
       <command>/opt/itad-laptop/launch.sh</command>
     </action>
   </item>
+  <item label="Launch old text pipeline (Check - Wipe - Test)">
+    <action name="Execute">
+      <command>xterm -fullscreen -e sudo python3 /opt/itad-laptop/itad_run.py</command>
+    </action>
+  </item>
   <separator />
+  <item label="Component tests only (text)">
+    <action name="Execute">
+      <command>xterm -e sudo python3 /opt/itad-laptop/laptop_test.py</command>
+    </action>
+  </item>
   <item label="Test Keyboard">
     <action name="Execute">
       <command>python3 /opt/itad-laptop/keyboard_test.py</command>
@@ -191,7 +226,7 @@ echo "== 4f. Hide Boot Menus (Syslinux & GRUB) =="
 SYS_CFG_DIR="$CFG/bootloaders/isolinux"
 mkdir -p "$SYS_CFG_DIR"
 
-# FIXED: Generate an 8-bit indexed color PNG with 16 colors for Syslinux compatibility
+# Generate an 8-bit indexed color PNG with 16 colors for Syslinux compatibility
 convert -size 640x480 xc:black -type Palette -colors 16 -depth 8 "$SYS_CFG_DIR/splash.png"
 convert -size 800x600 xc:black -type Palette -colors 16 -depth 8 "$SYS_CFG_DIR/splash800x600.png"
 
