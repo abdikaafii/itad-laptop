@@ -28,8 +28,10 @@ if [ "${1:-}" = "--inner" ]; then
         else
             cd "$APP_DIR" || true
             log "starting itad_run.py"
-            # Use sudo -E to keep DISPLAY and ITAD_DATA variables for the root process
-            sudo -E python3 "$APP"
+            
+            # Explicitly pass the ITAD_DATA variable to sudo
+            sudo ITAD_DATA="$ITAD_DATA" python3 "$APP"
+            
             log "itad_run.py exited with code $?"
         fi
 
@@ -69,6 +71,10 @@ dev="$(blkid -L "$DATA_LABEL" 2>/dev/null || true)"
 if [ -n "$dev" ]; then
     sudo mkdir -p "$DATA_MNT"
     sudo mountpoint -q "$DATA_MNT" || sudo mount -o rw "$dev" "$DATA_MNT" 2>>"$LOG"
+    
+    # Give the live user permission to write to the USB stick
+    sudo chmod 777 "$DATA_MNT" 
+    
     export ITAD_DATA="$DATA_MNT"
     log "ITAD_DATA stick mounted from $dev"
 else
