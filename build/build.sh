@@ -44,6 +44,7 @@ unclutter
 ntfs-3g
 alsa-utils
 network-manager
+smartmontools
 EOF
 
 echo "== 3. Boot splash theme =="
@@ -92,14 +93,22 @@ update-alternatives --set default.plymouth \
 EOF
 chmod +x "$HOOKS/0100-set-plymouth-theme.chroot"
 
+echo "== 4a. Passwordless sudo for live user =="
+SUDOERS_DIR="$INC/etc/sudoers.d"
+mkdir -p "$SUDOERS_DIR"
+echo "user ALL=(ALL) NOPASSWD: ALL" > "$SUDOERS_DIR/live-nopasswd"
+chmod 0440 "$SUDOERS_DIR/live-nopasswd"
+
 echo "== 4b. Setup auto-start for the ITAD GUI =="
 AUTOSTART_DIR="$INC/etc/xdg/openbox"
 mkdir -p "$AUTOSTART_DIR"
 
 cat > "$AUTOSTART_DIR/autostart" <<'EOF'
 #!/bin/bash
-# Start the ITAD GUI Tool automatically when the desktop loads.
-python3 /opt/itad-laptop/laptop_window.py &
+# Allow root (sudo) to draw windows on the screen
+xhost +local:root > /dev/null 2>&1
+# Start the GUI (without -E so it runs as root with the xhost permission)
+sudo python3 /opt/itad-laptop/laptop_test.py > /tmp/gui.log 2>&1 &
 EOF
 chmod +x "$AUTOSTART_DIR/autostart"
 
@@ -118,10 +127,18 @@ exec openbox-session
 EOF
 chmod +x "$SKEL_DIR/.xinitrc"
 
+# Create BOTH .profile and .bash_profile to catch any shell
 cat > "$SKEL_DIR/.bash_profile" <<'EOF'
 if [ -z "$DISPLAY" ] && [ "$(tty)" = "/dev/tty1" ]; then
     clear
-    exec startx > /dev/null 2>&1
+    startx
+fi
+EOF
+
+cat > "$SKEL_DIR/.profile" <<'EOF'
+if [ -z "$DISPLAY" ] && [ "$(tty)" = "/dev/tty1" ]; then
+    clear
+    startx
 fi
 EOF
 
@@ -134,7 +151,7 @@ cat > "$OPENBOX_MENU" <<'EOF'
 <menu id="root-menu" label="Openbox 3">
   <item label="Launch ITAD GUI (LaptopSeal)">
     <action name="Execute">
-      <command>python3 /opt/itad-laptop/laptop_window.py</command>
+      <command>sudo python3 /opt/itad-laptop/laptop_test.py</command>
     </action>
   </item>
   <item label="Launch ITAD Terminal Pipeline">
@@ -153,27 +170,6 @@ cat > "$OPENBOX_MENU" <<'EOF'
       <command>python3 /opt/itad-laptop/screen_test.py</command>
     </action>
   </item>
-  <item label="Test Speaker">
-    <action name="Execute">
-      <command>python3 /opt/itad-laptop/speaker_test.py</command>
-    </action>
-  </item>
-  <item label="Test Microphone">
-    <action name="Execute">
-      <command>python3 /opt/itad-laptop/mic_test.py</command>
-    </action>
-  </item>
-  <item label="Test Wi-Fi">
-    <action name="Execute">
-      <command>python3 /opt/itad-laptop/wifi_test.py</command>
-    </action>
-  </item>
-  <item label="Test Touchpad">
-    <action name="Execute">
-      <command>python3 /opt/itad-laptop/touchpad_test.py</command>
-    </action>
-  </item>
-  <separator />
   <item label="Terminal">
     <action name="Execute">
       <command>xterm</command>
@@ -195,10 +191,9 @@ echo "== 4f. Hide Boot Menus (Syslinux & GRUB) =="
 SYS_CFG_DIR="$CFG/bootloaders/isolinux"
 mkdir -p "$SYS_CFG_DIR"
 
-# Replace the blue Debian splash images with solid black ones
-convert -size 640x480 xc:black "$SYS_CFG_DIR/splash.png"
-convert -size 800x600 xc:black "$SYS_CFG_DIR/splash800x600.png"
-convert -size 1024x768 xc:black "$SYS_CFG_DIR/splash1024x768.png"
+# FIXED: Generate an 8-bit indexed color PNG with 16 colors for Syslinux compatibility
+convert -size 640x480 xc:black -type Palette -colors 16 -depth 8 "$SYS_CFG_DIR/splash.png"
+convert -size 800x600 xc:black -type Palette -colors 16 -depth 8 "$SYS_CFG_DIR/splash800x600.png"
 
 # Bypass the graphical menu entirely and boot the default live entry instantly
 cat > "$SYS_CFG_DIR/isolinux.cfg" <<'EOF'
