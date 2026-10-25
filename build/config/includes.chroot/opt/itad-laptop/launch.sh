@@ -18,6 +18,9 @@ if [ "${1:-}" = "--inner" ]; then
     export TERM="${TERM:-xterm-256color}"
     clear
 
+    # Track if we are bypassing the block
+    CONTINUE_FLAG=""
+
     while true; do
         if ! command -v python3 >/dev/null 2>&1; then
             echo "ERROR: python3 is not installed on this USB."
@@ -27,10 +30,10 @@ if [ "${1:-}" = "--inner" ]; then
             ls -1 "$APP_DIR" 2>/dev/null
         else
             cd "$APP_DIR" || true
-            log "starting itad_run.py"
+            log "starting itad_run.py with flags: $CONTINUE_FLAG"
             
-            # Explicitly pass the ITAD_DATA variable to sudo
-            sudo ITAD_DATA="$ITAD_DATA" python3 "$APP"
+            # Pass the ITAD_DATA variable and any flags to sudo
+            sudo ITAD_DATA="$ITAD_DATA" python3 "$APP" $CONTINUE_FLAG
             
             log "itad_run.py exited with code $?"
         fi
@@ -39,19 +42,21 @@ if [ "${1:-}" = "--inner" ]; then
         echo "=============================================="
         echo "  ITAD tool has stopped. What now?"
         echo "=============================================="
-        echo "  [R] Run the tool again"
+        echo "  [R] Run the tool again (Check -> Wipe -> Test)"
+        echo "  [C] CONTINUE anyway (Bypass Check, go to Wipe)"
         echo "  [S] Open a shell (for technicians)"
         echo "  [B] Reboot"
         echo "  [P] Power off"
         echo
-        read -r -n1 -p "  Choose R / S / B / P: " choice
+        read -r -n1 -p "  Choose R / C / S / B / P: " choice
         echo
         case "${choice,,}" in
-            r) clear ;;
+            r) CONTINUE_FLAG=""; clear ;;
+            c) CONTINUE_FLAG="--continue-on-blocked"; clear ;;
             s) clear; echo "Type 'exit' to come back to this menu."; bash ;;
             b) sync; sudo reboot ;;
             p) sync; sudo poweroff ;;
-            *) clear ;;
+            *) CONTINUE_FLAG=""; clear ;;
         esac
     done
     exit 0
