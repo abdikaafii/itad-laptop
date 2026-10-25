@@ -23,7 +23,10 @@ lb config \
   --memtest none \
   --iso-application "ITAD Laptop Tool" \
   --iso-volume "ITAD_LAPTOP" \
-  --bootappend-live "boot=live components quiet splash loglevel=0 systemd.show_status=false vt.global_cursor_default=0 plymouth.ignore-serial-consoles"
+  --bootappend-live "boot=live components quiet splash loglevel=0 systemd.show_status=false vt.global_cursor_default=0 plymouth.ignore-serial-consoles" \
+  --syslinux-timeout 1 \
+  --syslinux-prompt 0 \
+  --grub-timeout 0
 
 echo "== 2b. Package list =="
 mkdir -p "$CFG/package-lists"
@@ -151,22 +154,28 @@ chmod +x "$INC/opt/itad-laptop/launch.sh" 2>/dev/null || true
 chmod +x "$INC/opt/itad-laptop/"*.py 2>/dev/null || true
 
 echo "== 4f. Hide Boot Menus (Syslinux & GRUB) =="
-# Syslinux (BIOS/Legacy)
+# 1. Syslinux (BIOS/Legacy)
 SYS_CFG_DIR="$CFG/bootloaders/isolinux"
 mkdir -p "$SYS_CFG_DIR"
+
+# Replace the blue Debian splash image with a solid black one
+convert -size 640x480 xc:black "$SYS_CFG_DIR/splash.png"
+
+# Bypass the graphical menu entirely and boot the default live entry instantly
 cat > "$SYS_CFG_DIR/isolinux.cfg" <<'EOF'
-include menu.cfg
-default vesamenu.c32
+include live.cfg
+default live
 prompt 0
 timeout 1
 EOF
 
-# GRUB (UEFI)
+# 2. GRUB (UEFI)
 GRUB_DIR="$INC/etc/default"
 mkdir -p "$GRUB_DIR"
 cat > "$GRUB_DIR/grub" <<'EOF'
 GRUB_DEFAULT=0
 GRUB_TIMEOUT=0
+GRUB_TIMEOUT_STYLE=hidden
 GRUB_HIDDEN_TIMEOUT=0
 GRUB_HIDDEN_TIMEOUT_QUIET=true
 GRUB_DISABLE_RECOVERY=true
