@@ -41,6 +41,8 @@ util-linux
 x11-xserver-utils
 unclutter
 ntfs-3g
+alsa-utils
+network-manager
 EOF
 
 echo "== 3. Boot splash theme =="
@@ -129,7 +131,7 @@ cat > "$OPENBOX_MENU" <<'EOF'
 <?xml version="1.0" encoding="UTF-8"?>
 <openbox_menu xmlns="http://openbox.org/3.4/menu">
 <menu id="root-menu" label="Openbox 3">
-  <item label="Launch ITAD Tool">
+  <item label="Launch ITAD Wipe Pipeline">
     <action name="Execute">
       <command>/opt/itad-laptop/launch.sh</command>
     </action>
@@ -140,6 +142,32 @@ cat > "$OPENBOX_MENU" <<'EOF'
       <command>python3 /opt/itad-laptop/keyboard_test.py</command>
     </action>
   </item>
+  <item label="Test Screen (Colors)">
+    <action name="Execute">
+      <command>python3 /opt/itad-laptop/screen_test.py</command>
+    </action>
+  </item>
+  <item label="Test Speaker">
+    <action name="Execute">
+      <command>python3 /opt/itad-laptop/speaker_test.py</command>
+    </action>
+  </item>
+  <item label="Test Microphone">
+    <action name="Execute">
+      <command>python3 /opt/itad-laptop/mic_test.py</command>
+    </action>
+  </item>
+  <item label="Test Wi-Fi">
+    <action name="Execute">
+      <command>python3 /opt/itad-laptop/wifi_test.py</command>
+    </action>
+  </item>
+  <item label="Test Touchpad">
+    <action name="Execute">
+      <command>python3 /opt/itad-laptop/touchpad_test.py</command>
+    </action>
+  </item>
+  <separator />
   <item label="Terminal">
     <action name="Execute">
       <command>xterm</command>
