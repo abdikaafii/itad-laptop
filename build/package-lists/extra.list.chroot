@@ -1,0 +1,13 @@
+stress-ng
+memtester
+ffmpeg
+evtest
+edac-utils
+iproute2
+firmware-linux
+firmware-iwlwifi
+firmware-realtek
+firmware-atheros
+firmware-brcm80211
+firmware-misc-nonfree
+firmware-sof-signed
