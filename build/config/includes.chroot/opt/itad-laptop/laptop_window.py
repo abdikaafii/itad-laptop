@@ -1,11 +1,25 @@
 #!/usr/bin/env python3
 """
-laptop_window.py - LaptopSeal window (v1.0.0)
+laptop_window.py - LaptopSeal window (v1.1.0)
 This is the GRAPHICAL USER INTERFACE (GUI).
+
+v1.1.0
+  - New "Sign in" screen: technician name + password.
+    Passwords are never stored. Only a salted PBKDF2-SHA256 hash is
+    saved in technicians.txt (on the ITAD_DATA stick when it is plugged in).
+  - "Add technician" button on the sign-in screen.
+  - Hardware card shows the real RAM size (from the RAM modules, not the
+    smaller number Linux reports), RAM type, speed and slots used.
+  - Hardware card and report show the screen size in inches and the
+    resolution (read from the built-in screen's EDID).
 """
 import argparse
+import glob
+import hashlib
+import hmac
 import importlib.util
 import json
+import math
 import os
 import pty
 import queue
@@ -14,6 +28,7 @@ import shutil
 import subprocess
 import sys
 import threading
+import time
 from datetime import datetime
 
 try:
@@ -22,7 +37,7 @@ try:
 except Exception:
     TZ = None
 
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 TOOLS_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # --- THESE ARE THE FILES THIS GUI WILL RUN ---
@@ -39,7 +54,17 @@ RED_BAN, GREEN_BAN = "#C62F2F", "#1FA971"
 FONT = "DejaVu Sans"
 
 ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]|\x1b\([A-Z0-9]")
-STEPS = ["1  Start", "2  Checks", "3  Wipe & Tests", "4  Report"]
+STEPS = ["1  Sign in", "2  Job", "3  Checks", "4  Wipe & Tests", "5  Report"]
+TECH_FILE = "technicians.txt"
+PBKDF_ITER = 200000
+MIN_PASSWORD = 6
+MAX_TRIES = 5          # wrong passwords before a short lock
+LOCK_SECONDS = 30
+NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 ._'-]{1,29}$")
+STD_SCREENS = [10.1, 11.6, 12.0, 12.3, 12.5, 13.0, 13.3, 13.4, 13.5, 13.6,
+               14.0, 14.5, 15.0, 15.6, 16.0, 16.1, 17.0, 17.3, 18.0]
+STD_RAM_GB = [1, 2, 3, 4, 6, 8, 12, 16, 20, 24, 32, 36, 40, 48, 64, 96, 128,
+              192, 256]
 LOCATIONS = ["Warehouse DPA3 Test Bay 1", "Warehouse DPA3 Test Bay 2",
              "Warehouse DPA3 Test Bay 3", "Warehouse DPA3 Test Bay 4", "Other"]
 AUTO_TESTS = "cpu,ram,drive,battery,webcam,wifi,touchpad,usb"
@@ -126,22 +151,306 @@ def pick_out_dir():
     return d, False
 
 
-def load_technicians(out_dir):
-    for base in (out_dir, TOOLS_DIR, "/mnt/itad"):
-        p = os.path.join(base, "technicians.txt")
+# =============================================================================
+# technician accounts (technicians.txt)
+#   One line per technician:   Name:pbkdf2_sha256$200000$<salt>$<hash>
+#   A line with only a name has no password yet and cannot sign in.
+#   The real password is NEVER written anywhere.
+# =============================================================================
+def tech_files(out_dir):
+    seen, files = set(), []
+    for base in (out_dir, "/mnt/itad", TOOLS_DIR):
+        p = os.path.join(base, TECH_FILE)
+        rp = os.path.realpath(p)
+        if rp not in seen and os.path.isfile(p):
+            seen.add(rp)
+            files.append(p)
+    return files
+
+
+def parse_tech_line(ln):
+    ln = ln.strip()
+    if not ln or ln.startswith("#"):
+        return None, ""
+    if ":" in ln:
+        name, rest = ln.split(":", 1)
+    else:
+        name, rest = re.split(r",", ln, 1)[0], ""
+    name = name.strip()
+    rest = rest.strip()
+    return (name or None), (rest if rest.startswith("pbkdf2_sha256$") else "")
+
+
+def load_accounts(out_dir):
+    """Returns {lower name: {"name": Name, "hash": stored hash or ""}}."""
+    acc = {}
+    for p in tech_files(out_dir):
         try:
-            names = []
             with open(p) as f:
                 for ln in f:
-                    ln = ln.strip()
-                    if ln and not ln.startswith("#"):
-                        names.append(re.split(r"[:,]", ln)[0].strip())
-            names = [n for n in names if n]
-            if names:
-                return names
+                    name, h = parse_tech_line(ln)
+                    if not name:
+                        continue
+                    key = name.lower()
+                    if key not in acc or (h and not acc[key]["hash"]):
+                        acc[key] = {"name": name, "hash": h, "file": p}
         except Exception:
             pass
-    return ["Ali", "Bello", "Carl", "Ben", "Yuri", "Conor"]
+    return acc
+
+
+def hash_password(password, salt=None, iterations=PBKDF_ITER):
+    salt = salt or os.urandom(16)
+    dk = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt,
+                             iterations)
+    return "pbkdf2_sha256$%d$%s$%s" % (iterations, salt.hex(), dk.hex())
+
+
+def verify_password(password, stored):
+    try:
+        algo, it, salt, want = stored.split("$")
+        if algo != "pbkdf2_sha256":
+            return False
+        dk = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"),
+                                 bytes.fromhex(salt), int(it))
+        return hmac.compare_digest(dk.hex(), want)
+    except Exception:
+        return False
+
+
+def save_account(out_dir, name, password):
+    """Adds or updates one technician. Returns the file path used."""
+    path = os.path.join(out_dir, TECH_FILE)
+    lines = []
+    try:
+        with open(path) as f:
+            lines = f.read().splitlines()
+    except Exception:
+        lines = ["# LaptopSeal technicians. Passwords are stored as hashes only.",
+                 "# Add technicians from the sign-in screen."]
+    new_line = "%s:%s" % (name, hash_password(password))
+    done = False
+    for i, ln in enumerate(lines):
+        n, _ = parse_tech_line(ln)
+        if n and n.lower() == name.lower():
+            lines[i] = new_line
+            done = True
+    if not done:
+        lines.append(new_line)
+    tmp = path + ".tmp"
+    with open(tmp, "w") as f:
+        f.write("\n".join(lines) + "\n")
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, path)
+    try:
+        os.chmod(path, 0o600)
+    except Exception:
+        pass
+    return path
+
+
+# =============================================================================
+# hardware details for the card and the report
+# =============================================================================
+def run_cmd(cmd, timeout=15):
+    try:
+        p = subprocess.run(cmd, capture_output=True, text=True,
+                           timeout=timeout)
+        return p.returncode, p.stdout
+    except Exception:
+        return 1, ""
+
+
+def _size_to_gb(text):
+    m = re.match(r"(\d+(?:\.\d+)?)\s*(KB|MB|GB|TB)", text or "", re.I)
+    if not m:
+        return 0
+    n, unit = float(m.group(1)), m.group(2).upper()
+    return {"KB": n / 1048576, "MB": n / 1024, "GB": n, "TB": n * 1024}[unit]
+
+
+def _gb_text(gb):
+    return ("%d GB" % round(gb)) if abs(gb - round(gb)) < 0.05 else \
+        ("%.1f GB" % gb)
+
+
+def parse_dmidecode_memory(text):
+    """Reads 'dmidecode -t 17' output. Returns a list of slot dicts."""
+    slots = []
+    cur = None
+    for raw in (text or "").splitlines():
+        line = raw.strip()
+        if line == "Memory Device":
+            cur = {}
+            slots.append(cur)
+            continue
+        if cur is None or ":" not in line or raw.startswith("\t\t"):
+            continue
+        k, v = line.split(":", 1)
+        cur[k.strip()] = v.strip()
+    out = []
+    for s in slots:
+        gb = _size_to_gb(s.get("Size", ""))
+        speed = s.get("Configured Memory Speed") or s.get("Speed") or ""
+        if speed.lower() in ("unknown", "none", "0 mt/s", "0 mhz"):
+            speed = s.get("Speed", "")
+        if speed.lower() in ("unknown", "none"):
+            speed = ""
+        out.append({
+            "size_gb": gb,
+            "type": s.get("Type", ""),
+            "speed": speed.replace("MHz", "MT/s") if speed else "",
+            "form": s.get("Form Factor", ""),
+            "locator": s.get("Locator", ""),
+            "maker": s.get("Manufacturer", ""),
+            "part": s.get("Part Number", ""),
+        })
+    return out
+
+
+def ram_from_meminfo():
+    try:
+        with open("/proc/meminfo") as f:
+            for ln in f:
+                if ln.startswith("MemTotal:"):
+                    gb = int(ln.split()[1]) / 1048576
+                    for std in STD_RAM_GB:
+                        if gb <= std:
+                            return std
+                    return round(gb)
+    except Exception:
+        pass
+    return 0
+
+
+def ram_details():
+    rc, out = run_cmd(["dmidecode", "-t", "17"])
+    slots = parse_dmidecode_memory(out) if rc == 0 else []
+    used = [s for s in slots if s["size_gb"] > 0]
+    info = {"total_gb": 0, "type": "", "speed": "", "slots_total": len(slots),
+            "slots_used": len(used), "modules": used, "soldered": False,
+            "source": "dmidecode"}
+    if used:
+        info["total_gb"] = sum(s["size_gb"] for s in used)
+        types = [s["type"] for s in used
+                 if s["type"] and s["type"].lower() not in ("unknown", "other")]
+        if types:
+            info["type"] = max(set(types), key=types.count)
+        speeds = []
+        for s in used:
+            m = re.match(r"(\d+)", s["speed"] or "")
+            if m:
+                speeds.append(int(m.group(1)))
+        if speeds:
+            info["speed"] = "%d MT/s" % max(speeds)
+        info["soldered"] = any(s["form"].lower() in ("row of chips", "chip")
+                               for s in used)
+    else:
+        info["total_gb"] = ram_from_meminfo()
+        info["source"] = "estimate"
+    return info
+
+
+def ram_text(r, short=False):
+    if not r or not r.get("total_gb"):
+        return "-"
+    main = " ".join(x for x in (_gb_text(r["total_gb"]), r.get("type"),
+                                r.get("speed")) if x)
+    if r.get("source") == "estimate":
+        return main + " (estimated, type not readable)"
+    if short:
+        return main
+    mods = " + ".join(_gb_text(m["size_gb"]) for m in r.get("modules", []))
+    slots = "%d of %d slot%s used" % (r["slots_used"], r["slots_total"],
+                                      "" if r["slots_total"] == 1 else "s")
+    if r.get("soldered"):
+        slots += ", soldered on board"
+    return "%s\n%s: %s" % (main, slots, mods)
+
+
+def parse_edid(b):
+    """Returns dict with maker, name, width/height mm, resolution."""
+    if len(b) < 128 or b[0:8] != b"\x00\xff\xff\xff\xff\xff\xff\x00":
+        return None
+    w = (b[8] << 8) | b[9]
+    maker = "".join(chr(((w >> s) & 0x1F) + 64) for s in (10, 5, 0))
+    info = {"maker": maker, "name": "", "w_mm": 0, "h_mm": 0,
+            "res_w": 0, "res_h": 0}
+    for off in (54, 72, 90, 108):
+        d = b[off:off + 18]
+        if d[0] == 0 and d[1] == 0:
+            if d[3] == 0xFC:
+                info["name"] = d[5:18].decode("ascii", "ignore").strip()
+            continue
+        if not info["res_w"]:
+            info["res_w"] = d[2] | ((d[4] & 0xF0) << 4)
+            info["res_h"] = d[5] | ((d[7] & 0xF0) << 4)
+            info["w_mm"] = d[12] | ((d[14] & 0xF0) << 4)
+            info["h_mm"] = d[13] | ((d[14] & 0x0F) << 8)
+    if not info["w_mm"] or not info["h_mm"]:
+        info["w_mm"], info["h_mm"] = b[21] * 10, b[22] * 10
+    return info
+
+
+def screen_details():
+    found = []
+    for d in sorted(glob.glob("/sys/class/drm/card*-*")):
+        conn = os.path.basename(d).split("-", 1)[1]
+        try:
+            with open(os.path.join(d, "status")) as f:
+                if f.read().strip() != "connected":
+                    continue
+            with open(os.path.join(d, "edid"), "rb") as f:
+                e = parse_edid(f.read())
+        except Exception:
+            continue
+        if e:
+            e["connector"] = conn
+            e["internal"] = bool(re.match(r"(eDP|LVDS|DSI)", conn))
+            found.append(e)
+    found.sort(key=lambda e: not e["internal"])
+    if found:
+        s = found[0]
+    else:
+        s = None
+        rc, out = run_cmd(["xrandr", "--query"], timeout=5)
+        for ln in out.splitlines():
+            m = re.search(r"^(\S+) connected.*?(\d+)x(\d+)\+.*?(\d+)mm x "
+                          r"(\d+)mm", ln)
+            if m:
+                s = {"connector": m.group(1), "maker": "", "name": "",
+                     "res_w": int(m.group(2)), "res_h": int(m.group(3)),
+                     "w_mm": int(m.group(4)), "h_mm": int(m.group(5)),
+                     "internal": bool(re.match(r"(eDP|LVDS|DSI)",
+                                               m.group(1)))}
+                if s["internal"]:
+                    break
+    if not s:
+        return None
+    s["inches"] = 0
+    if s["w_mm"] and s["h_mm"]:
+        raw = math.hypot(s["w_mm"], s["h_mm"]) / 25.4
+        near = min(STD_SCREENS, key=lambda x: abs(x - raw))
+        # use the size printed on the box when it is very close
+        s["inches"] = near if abs(near - raw) <= 0.2 else round(raw, 1)
+    return s
+
+
+def screen_text(s):
+    if not s:
+        return "not detected"
+    parts = []
+    if s.get("inches"):
+        parts.append('%.1f"' % s["inches"])
+    if s.get("res_w"):
+        parts.append("%d x %d" % (s["res_w"], s["res_h"]))
+    txt = "  ".join(parts) or "size unknown"
+    extra = [x for x in (s.get("name") or s.get("maker"),
+                         s.get("connector")) if x]
+    if not s.get("internal"):
+        extra.append("external screen")
+    return txt + ("  (%s)" % ", ".join(extra) if extra else "")
 
 
 def load_check_module():
@@ -208,7 +517,8 @@ def render_txt(rep):
                  ("Serial", rep["serial"]), ("Technician", rep["technician"]),
                  ("Location", rep["location"]), ("Date/time", rep["time"]),
                  ("Make / model", rep["make_model"]), ("CPU", rep["cpu"]),
-                 ("RAM", rep["ram"]), ("Storage", rep["storage"])):
+                 ("RAM", rep["ram"]), ("Screen", rep.get("screen")),
+                 ("Storage", rep["storage"])):
         add("%-14s: %s" % (k, v or "-"))
     add("")
     add("STAGES")
@@ -251,7 +561,8 @@ def write_pdf(path, rep):
         ("Serial", rep["serial"]), ("Technician", rep["technician"]),
         ("Location", rep["location"]), ("Date/time", rep["time"]),
         ("Make / model", rep["make_model"]), ("CPU", rep["cpu"]),
-        ("RAM", rep["ram"]), ("Storage", rep["storage"]),
+        ("RAM", rep["ram"]), ("Screen", rep.get("screen")),
+        ("Storage", rep["storage"]),
         ("Absolute lock", rep["absolute"]), ("Enrolment", rep["enrolment"]),
         ("Wipe", rep["wipe_state"]))]
     t = Table(rows, colWidths=[110, 380])
@@ -299,6 +610,8 @@ class App:
         self.p_wipe = os.path.join(self.out_dir, "laptop_wipe.json")
         self.p_test = os.path.join(self.out_dir, "laptop_test.json")
         self.ident, self.disks = quick_identity()
+        self.ram = ram_details()
+        self.screen = screen_details()
         ser = self.ident.get("serial", "")
         self.s = {"job_id": "JOB-" + now().strftime("%Y%m%d-%H%M%S"),
                   "serial": ser if valid_serial(ser) else "",
@@ -306,6 +619,7 @@ class App:
                   "wipe_state": "NOT RUN", "auto": [], "manual": {}}
         self.pages, self.step_labels, self.prog = {}, [], {}
         self.test_rows, self.manual_btns = {}, {}
+        self.fails, self.locked_until = 0, 0.0
         root.title("LaptopSeal")
         root.configure(bg=PANEL)
         if not windowed:
@@ -317,12 +631,20 @@ class App:
             root.geometry("1100x700")
         self.setup_style()
         self.build_shell()
+        self.build_login()
         self.build_start()
         self.build_checks()
         self.build_wipe()
         self.build_report()
-        self.show("start")
-        self.set_step(0)
+        # "Next laptop" restarts the window but keeps the technician
+        # signed in (only if that account still has a password).
+        keep = os.environ.get("ITAD_SIGNED_IN", "")
+        acc = load_accounts(self.out_dir).get(keep.lower())
+        if keep and acc and acc["hash"]:
+            self.signed_in(acc["name"])
+        else:
+            os.environ.pop("ITAD_SIGNED_IN", None)
+            self.show_login()
         root.protocol("WM_DELETE_WINDOW", self.quit)
         root.bind("<Control-q>", lambda e: self.quit())
         root.bind("<Escape>", lambda e: self.toggle_fullscreen())
@@ -355,12 +677,13 @@ class App:
         inner.pack(fill="both", expand=True, padx=14, pady=(0, 12))
         return outer, inner
 
-    def entry(self, parent, var, readonly=False):
+    def entry(self, parent, var, readonly=False, secret=False):
         return self.tk.Entry(parent, textvariable=var, bg=PANEL, fg=TEXT,
                              insertbackground=TEXT, relief="flat",
                              font=self.F(12), highlightthickness=1,
                              highlightbackground=BORDER, highlightcolor=CYAN,
                              readonlybackground=BORDER, disabledforeground=MUTED,
+                             show="•" if secret else "",
                              state="readonly" if readonly else "normal")
 
     def setup_style(self):
@@ -518,7 +841,194 @@ class App:
     def tech(self):
         return self.v_tech.get().strip()
 
-    # ---------- screen 1: start ----------
+    # ---------- screen 1: sign in ----------
+    def build_login(self):
+        tk = self.tk
+        pg = self.new_page("login")
+        self.v_user = tk.StringVar(value="")
+        self.v_pass = tk.StringVar(value="")
+        mid = tk.Frame(pg, bg=PANEL)
+        mid.place(relx=0.5, rely=0.42, anchor="center")
+        box = tk.Frame(mid, bg=NAVY, highlightbackground=BORDER,
+                       highlightthickness=1)
+        box.pack()
+        inner = tk.Frame(box, bg=NAVY)
+        inner.pack(padx=40, pady=30)
+        self.lbl(inner, "Technician sign in", 20, True).pack(anchor="w")
+        self.lbl(inner, "Sign in with your own name and password.", 10,
+                 fg=MUTED).pack(anchor="w", pady=(4, 18))
+        self.lbl(inner, "NAME", 9, True, fg=MUTED).pack(anchor="w")
+        self.l_user = self.entry(inner, self.v_user)
+        self.l_user.configure(width=32)
+        self.l_user.pack(fill="x", pady=(2, 12), ipady=4)
+        self.lbl(inner, "PASSWORD", 9, True, fg=MUTED).pack(anchor="w")
+        self.l_pass = self.entry(inner, self.v_pass, secret=True)
+        self.l_pass.pack(fill="x", pady=(2, 6), ipady=4)
+        self.l_msg = self.lbl(inner, "", 10, fg=WARN, wraplength=380)
+        self.l_msg.pack(anchor="w", pady=(4, 10))
+        self.l_go = self.btn(inner, "Sign in", self.do_login)
+        self.l_go.pack(fill="x")
+        self.l_user.bind("<Return>", lambda e: self.l_pass.focus_set())
+        self.l_pass.bind("<Return>", lambda e: self.do_login())
+        left, right, msg = self.bar(pg)
+        self.btn(left, "Power off", self.power_off, "ghost").pack()
+        self.btn(right, "Add technician", self.add_tech_dialog,
+                 "ghost").pack()
+        self.l_where = msg
+
+    def show_login(self):
+        self.v_tech.set("")
+        self.v_pass.set("")
+        acc = load_accounts(self.out_dir)
+        ready = [a for a in acc.values() if a["hash"]]
+        if not ready:
+            self.l_msg.configure(
+                text="No technician accounts yet. Press 'Add technician' "
+                     "(bottom right) to create the first one.", fg=WARN)
+        else:
+            self.l_msg.configure(text="", fg=WARN)
+        self.l_where.configure(
+            text="" if self.persistent else
+            "No ITAD_DATA stick: new accounts and reports are lost at "
+            "power off.", fg=WARN)
+        self.show("login")
+        self.set_step(0)
+        self.root.after(200, self.l_user.focus_set)
+
+    def do_login(self):
+        left = self.locked_until - time.time()
+        if left > 0:
+            self.l_msg.configure(text="Too many wrong tries. Wait %d seconds."
+                                 % (int(left) + 1), fg=BAD)
+            return
+        name = self.v_user.get().strip()
+        pw = self.v_pass.get()
+        if not name or not pw:
+            self.l_msg.configure(text="Type your name and password.", fg=WARN)
+            return
+        acc = load_accounts(self.out_dir).get(name.lower())
+        if acc and acc["hash"] and verify_password(pw, acc["hash"]):
+            self.fails = 0
+            self.v_pass.set("")
+            self.signed_in(acc["name"])
+            return
+        self.v_pass.set("")
+        self.fails += 1
+        if acc and not acc["hash"]:
+            text = ("%s has no password yet. Use 'Add technician' to set "
+                    "one." % acc["name"])
+        else:
+            text = "Wrong name or password."
+        if self.fails >= MAX_TRIES:
+            self.fails = 0
+            self.locked_until = time.time() + LOCK_SECONDS
+            text += "  Locked for %d seconds." % LOCK_SECONDS
+        self.l_msg.configure(text=text, fg=BAD)
+        self.l_pass.focus_set()
+
+    def signed_in(self, name):
+        self.v_tech.set(name)
+        os.environ["ITAD_SIGNED_IN"] = name
+        self.start_msg.configure(text="")
+        self.show("start")
+        self.set_step(1)
+
+    def sign_out(self):
+        os.environ.pop("ITAD_SIGNED_IN", None)
+        self.v_user.set("")
+        self.show_login()
+
+    def add_tech_dialog(self):
+        tk = self.tk
+        acc = load_accounts(self.out_dir)
+        approvers = {k: a for k, a in acc.items() if a["hash"]}
+        need_ok = bool(approvers)
+        win = tk.Toplevel(self.root)
+        win.title("Add technician")
+        win.configure(bg=NAVY)
+        win.transient(self.root)
+        inner = tk.Frame(win, bg=NAVY)
+        inner.pack(padx=30, pady=24)
+        self.lbl(inner, "Add or change a technician", 16, True).pack(
+            anchor="w")
+        self.lbl(inner, "The password is saved as a secure hash, never as "
+                        "plain text.", 10, fg=MUTED).pack(anchor="w",
+                                                          pady=(2, 14))
+        v = {k: tk.StringVar(value="") for k in
+             ("name", "pw1", "pw2", "by", "bypw")}
+        fields = [("NEW TECHNICIAN NAME", "name", False),
+                  ("PASSWORD (at least %d characters)" % MIN_PASSWORD,
+                   "pw1", True),
+                  ("TYPE THE PASSWORD AGAIN", "pw2", True)]
+        if need_ok:
+            fields += [("APPROVED BY (an existing technician)", "by", False),
+                       ("THEIR PASSWORD", "bypw", True)]
+        first = None
+        for label, key, secret in fields:
+            self.lbl(inner, label, 9, True, fg=MUTED).pack(anchor="w")
+            e = self.entry(inner, v[key], secret=secret)
+            e.configure(width=34)
+            e.pack(fill="x", pady=(2, 10), ipady=3)
+            first = first or e
+        msg = self.lbl(inner, "" if need_ok else
+                       "This is the first account, so no approval is "
+                       "needed.", 10, fg=MUTED, wraplength=360)
+        msg.pack(anchor="w", pady=(0, 10))
+
+        def save():
+            name = v["name"].get().strip()
+            p1, p2 = v["pw1"].get(), v["pw2"].get()
+            if not NAME_RE.match(name):
+                msg.configure(text="Name: 2-30 letters or numbers (spaces, "
+                                   "dot, dash allowed).", fg=BAD)
+                return
+            if len(p1) < MIN_PASSWORD:
+                msg.configure(text="Password is too short.", fg=BAD)
+                return
+            if p1 != p2:
+                msg.configure(text="The two passwords are not the same.",
+                              fg=BAD)
+                return
+            if need_ok:
+                a = approvers.get(v["by"].get().strip().lower())
+                if not a or not verify_password(v["bypw"].get(), a["hash"]):
+                    v["bypw"].set("")
+                    msg.configure(text="Approval name or password is wrong.",
+                                  fg=BAD)
+                    return
+            try:
+                path = save_account(self.out_dir, name, p1)
+            except Exception as e:
+                msg.configure(text="Could not save: %s" % e, fg=BAD)
+                return
+            for k in v:
+                v[k].set("")
+            win.destroy()
+            note = "Saved %s in %s." % (name, path)
+            if not self.persistent:
+                note += ("  WARNING: no ITAD_DATA stick, this account is "
+                         "lost at power off.")
+            self.v_user.set(name)
+            self.l_msg.configure(text=note + "  Now sign in.",
+                                 fg=OK if self.persistent else WARN)
+            self.l_pass.focus_set()
+
+        bf = tk.Frame(inner, bg=NAVY)
+        bf.pack(fill="x")
+        self.btn(bf, "Save", save).pack(side="left")
+        self.btn(bf, "Cancel", win.destroy, "ghost").pack(side="left",
+                                                           padx=8)
+        win.update_idletasks()
+        sw, sh = win.winfo_screenwidth(), win.winfo_screenheight()
+        w, h = win.winfo_reqwidth(), win.winfo_reqheight()
+        win.geometry("+%d+%d" % (max(0, (sw - w) // 2), max(0, (sh - h) // 2)))
+        try:
+            win.grab_set()
+        except Exception:
+            pass
+        first.focus_set()
+
+    # ---------- screen 2: job ----------
     def build_start(self):
         tk = self.tk
         pg = self.new_page("start")
@@ -530,8 +1040,7 @@ class App:
         form.pack(fill="x", padx=24, pady=(18, 8))
         for c in range(4):
             form.grid_columnconfigure(c, weight=1, uniform="f")
-        techs = load_technicians(self.out_dir)
-        fields = [("Technician", "combo", self.v_tech, techs, True),
+        fields = [("Technician (signed in)", "entry", self.v_tech, None, True),
                   ("Job ID", "entry", self.v_job, None, False),
                   ("Asset ID", "entry", self.v_asset, None,
                    bool(self.s["serial"])),
@@ -567,7 +1076,8 @@ class App:
                 ("Model", i.get("model") or "-"),
                 ("Serial", self.s["serial"] or "not found"),
                 ("CPU", i.get("cpu") or "-"),
-                ("RAM", "%s GB" % i.get("ram_gb", "-")),
+                ("RAM", ram_text(self.ram)),
+                ("Screen", screen_text(self.screen)),
                 ("Storage", "\n".join(stor)),
                 ("BIOS / boot", "%s %s  %s" % (i.get("bios_vendor", ""),
                                                i.get("bios_version", ""),
@@ -587,13 +1097,16 @@ class App:
             lab.grid(row=r, column=1, sticky="w", pady=5)
             self.prog[name] = lab
         left, right, mid = self.bar(pg)
-        self.btn(left, "Power off", self.power_off, "ghost").pack()
+        self.btn(left, "Power off", self.power_off, "ghost").pack(
+            side="left")
+        self.btn(left, "Sign out", self.sign_out, "ghost").pack(
+            side="left", padx=(10, 0))
         self.start_msg = mid
         self.btn(right, "Start checks", self.start_checks).pack()
 
     def start_checks(self):
         if not self.tech():
-            self.start_msg.configure(text="Pick your name first.", fg=WARN)
+            self.show_login()
             return
         if not self.job() or not self.asset():
             self.start_msg.configure(text="Job ID and Asset ID are needed.",
@@ -638,7 +1151,7 @@ class App:
 
     def run_check(self):
         self.show("checks")
-        self.set_step(1)
+        self.set_step(2)
         self.banner("Checking...", "wait")
         for w, t in ((self.c_abs, "-"), (self.c_enr, "-")):
             w.configure(text=t, fg=MUTED)
@@ -787,7 +1300,7 @@ class App:
 
     def enter_wipe(self):
         self.show("wipe")
-        self.set_step(2)
+        self.set_step(3)
         self.set_prog("Wipe", "checking drives...", CYAN)
         self.w_title.configure(text="Checking drives...", fg=TEXT)
         self.w_targets.configure(text="")
@@ -904,7 +1417,7 @@ class App:
         self.start_auto_tests()
 
     def start_auto_tests(self):
-        self.set_step(2)
+        self.set_step(3)
         self.set_prog("Tests", "running...", CYAN)
         self.t_status.configure(text="Running automatic tests...", fg=CYAN)
         for comp in COMPONENTS:
@@ -1147,7 +1660,11 @@ class App:
             "location": self.v_loc.get().strip(),
             "make_model": ("%s %s" % (i.get("manufacturer", ""),
                                       i.get("model", ""))).strip(),
-            "cpu": i.get("cpu", ""), "ram": "%s GB" % i.get("ram_gb", "-"),
+            "cpu": i.get("cpu", ""),
+            "ram": ram_text(self.ram).replace("\n", "; "),
+            "ram_details": self.ram,
+            "screen": screen_text(self.screen),
+            "screen_details": self.screen or {},
             "storage": stor,
             "absolute": chk.get("absolute_result", "?"),
             "enrolment": {"CLEAN": "CLEAN", "BLOCKED": "ACTIVE",
@@ -1162,7 +1679,7 @@ class App:
     def finish(self):
         rep = self.build_report_data()
         self.set_prog("Tests", "done", OK)
-        self.set_step(3)
+        self.set_step(4)
         self.show("report")
         bg, fg = {"PASS": (GREEN_BAN, NAVY), "FAIL": (RED_BAN, "white")}.get(
             rep["overall"], (WARN, NAVY))
@@ -1174,7 +1691,9 @@ class App:
         left = [("Job ID", rep["job_id"]), ("Asset ID", rep["asset_id"]),
                 ("Serial", rep["serial"]), ("Technician", rep["technician"]),
                 ("Location", rep["location"]), ("Time", rep["time"]),
-                ("Model", rep["make_model"])]
+                ("Model", rep["make_model"]),
+                ("RAM", ram_text(self.ram, short=True)),
+                ("Screen", rep["screen"])]
         for r, (k, v) in enumerate(left):
             self.lbl(self.r_left, k, 10, fg=MUTED).grid(row=r, column=0,
                                                         sticky="nw", padx=(0, 14),
@@ -1223,6 +1742,7 @@ class App:
 
     # ---------- misc ----------
     def next_laptop(self):
+        # keeps ITAD_SIGNED_IN so the technician stays signed in
         os.execv(PY, [PY] + sys.argv)
 
     def power_off(self):
