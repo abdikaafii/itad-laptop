@@ -1,24 +1,26 @@
 #!/bin/bash
 # launch.sh - starts the ITAD laptop tool
-# On the boot USB it lives at: /opt/itad-laptop/launch.sh
-# Start it with:  /opt/itad-laptop/launch.sh
+# It finds its own folder automatically (works in /opt or /opt/itad-laptop).
+# New layout: starts laptop_window.py. If that fails, falls back to itad_run.py.
 
-APP_DIR="/opt/itad-laptop"
+SELF="$(readlink -f "$0")"
+APP_DIR="$(dirname "$SELF")"
 APP="$APP_DIR/itad_run.py"
+WINDOW="$APP_DIR/laptop_window.py"
 LOG="/tmp/itad-launch.log"
+WINLOG="/tmp/itad-window.log"
 DATA_LABEL="ITAD_DATA"
 DATA_MNT="/mnt/itad"
 
 log() { echo "$(date '+%F %T') $*" >> "$LOG" 2>/dev/null; }
 
 # ------------------------------------------------------------
-# INNER MODE: this part runs inside the fullscreen window
+# INNER MODE: old text screen (fallback), runs inside xterm
 # ------------------------------------------------------------
 if [ "${1:-}" = "--inner" ]; then
     export TERM="${TERM:-xterm-256color}"
     clear
 
-    # Track if we are bypassing the block
     CONTINUE_FLAG=""
 
     while true; do
@@ -31,10 +33,7 @@ if [ "${1:-}" = "--inner" ]; then
         else
             cd "$APP_DIR" || true
             log "starting itad_run.py with flags: $CONTINUE_FLAG"
-            
-            # Pass the ITAD_DATA variable and any flags to sudo
             sudo ITAD_DATA="$ITAD_DATA" python3 "$APP" $CONTINUE_FLAG
-            
             log "itad_run.py exited with code $?"
         fi
 
@@ -63,10 +62,10 @@ if [ "${1:-}" = "--inner" ]; then
 fi
 
 # ------------------------------------------------------------
-# OUTER MODE: prepare the system, then open the window
+# OUTER MODE: prepare the system, then open the tool
 # ------------------------------------------------------------
 touch "$LOG"
-log "launch.sh started"
+log "launch.sh started from $APP_DIR"
 
 # 1. Never let the screen go blank or sleep
 sudo setterm -blank 0 -powerdown 0 2>/dev/null || true
@@ -76,10 +75,7 @@ dev="$(blkid -L "$DATA_LABEL" 2>/dev/null || true)"
 if [ -n "$dev" ]; then
     sudo mkdir -p "$DATA_MNT"
     sudo mountpoint -q "$DATA_MNT" || sudo mount -o rw "$dev" "$DATA_MNT" 2>>"$LOG"
-    
-    # Give the live user permission to write to the USB stick
-    sudo chmod 777 "$DATA_MNT" 
-    
+    sudo chmod 777 "$DATA_MNT"
     export ITAD_DATA="$DATA_MNT"
     log "ITAD_DATA stick mounted from $dev"
 else
@@ -109,15 +105,31 @@ if command -v unclutter >/dev/null 2>&1; then
     unclutter -idle 0.5 -root >/dev/null 2>&1 &
 fi
 
-# 5. Open the tool: fullscreen window if possible, otherwise plain console
+# 5. NEW LAYOUT: open the real window (laptop_window.py)
+if [ -n "${DISPLAY:-}" ] && [ -f "$WINDOW" ] && command -v python3 >/dev/null 2>&1 \
+   && command -v xset >/dev/null 2>&1 && xset q >/dev/null 2>&1; then
+    log "starting laptop_window.py on $DISPLAY"
+    cd "$APP_DIR" || true
+    sudo -E ITAD_DATA="$ITAD_DATA" DISPLAY="$DISPLAY" python3 "$WINDOW" >"$WINLOG" 2>&1
+    code=$?
+    log "laptop_window.py exited with code $code (details in $WINLOG)"
+    if [ "$code" -eq 0 ]; then
+        exit 0
+    fi
+    log "window failed, falling back to the old text screen"
+else
+    log "window not started (no screen, or $WINDOW missing), using old text screen"
+fi
+
+# 6. FALLBACK: old text screen in a fullscreen xterm, or plain console
 if [ -n "${DISPLAY:-}" ] && command -v xterm >/dev/null 2>&1 && xset q >/dev/null 2>&1; then
     log "opening fullscreen xterm on $DISPLAY"
     exec xterm -fullscreen +sb \
         -title "ITAD Laptop Tool" \
         -fa "DejaVu Sans Mono" -fs 13 \
         -bg "#050a14" -fg "#e6f1ff" \
-        -e bash "$0" --inner
+        -e bash "$SELF" --inner
 else
     log "no graphical screen, running on the console"
-    exec bash "$0" --inner
+    exec bash "$SELF" --inner
 fi
