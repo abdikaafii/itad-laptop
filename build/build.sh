@@ -35,6 +35,7 @@ xinit
 openbox
 xterm
 python3
+python3-tk
 sudo
 util-linux
 x11-xserver-utils
@@ -134,6 +135,11 @@ cat > "$OPENBOX_MENU" <<'EOF'
     </action>
   </item>
   <separator />
+  <item label="Test Keyboard">
+    <action name="Execute">
+      <command>python3 /opt/itad-laptop/keyboard_test.py</command>
+    </action>
+  </item>
   <item label="Terminal">
     <action name="Execute">
       <command>xterm</command>
