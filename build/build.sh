@@ -48,4 +48,55 @@ convert -size 760x240 xc:none \
   -fill "#38bdf8" -pointsize 30 -annotate +0+80 "Laptop Test and Wipe" \
   "$THEME/logo.png"
 
-cat > "$THEME/itad.plymouth" <
+# --- FIXED: complete plymouth theme descriptor ---
+cat > "$THEME/itad.plymouth" <<'EOF'
+[Plymouth Theme]
+Name=ITAD
+Description=ITAD Laptop boot splash
+ModuleName=script
+
+[script]
+ImageDir=/usr/share/plymouth/themes/itad
+ScriptFile=/usr/share/plymouth/themes/itad/itad.script
+EOF
+
+cat > "$THEME/itad.script" <<'EOF'
+# Minimal plymouth script theme: logo centred on the background
+logo = Image("logo.png");
+
+screen_w = Window.GetWidth();
+screen_h = Window.GetHeight();
+
+sprite = Sprite(logo);
+sprite.SetX(screen_w / 2 - logo.GetWidth() / 2);
+sprite.SetY(screen_h / 2 - logo.GetHeight() / 2);
+EOF
+
+echo "== 4. Hook: enable the ITAD plymouth theme inside the chroot =="
+mkdir -p "$HOOKS"
+cat > "$HOOKS/0100-set-plymouth-theme.chroot" <<'EOF'
+#!/bin/sh
+set -e
+update-alternatives --install \
+  /usr/share/plymouth/themes/default.plymouth \
+  default.plymouth \
+  /usr/share/plymouth/themes/itad/itad.plymouth \
+  100
+update-alternatives --set default.plymouth \
+  /usr/share/plymouth/themes/itad/itad.plymouth
+EOF
+chmod +x "$HOOKS/0100-set-plymouth-theme.chroot"
+
+echo "== 5. Build =="
+lb build
+
+echo
+echo "== 6. Collect output =="
+# live-build produces live-image-amd64.hybrid.iso (or binary.hybrid.iso on older versions)
+ISO_IN="$(ls -1t live-image-*.hybrid.iso binary.hybrid.iso 2>/dev/null | head -n1 || true)"
+if [ -z "${ISO_IN:-}" ]; then
+  echo "ERROR: lb build finished but no .hybrid.iso was produced" >&2
+  exit 1
+fi
+mv -f "$ISO_IN" "itad-laptop.iso"
+ls -lh itad-laptop.iso
