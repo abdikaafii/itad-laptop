@@ -25,7 +25,7 @@ lb config \
   --iso-volume "ITAD_LAPTOP" \
   --bootappend-live "boot=live components quiet splash loglevel=0 systemd.show_status=false vt.global_cursor_default=0 plymouth.ignore-serial-consoles"
 
-echo "== 2b. Package list (programs installed into the ISO) =="
+echo "== 2b. Package list =="
 mkdir -p "$CFG/package-lists"
 cat > "$CFG/package-lists/itad.list.chroot" <<'EOF'
 plymouth
@@ -39,9 +39,10 @@ sudo
 util-linux
 x11-xserver-utils
 unclutter
+ntfs-3g
 EOF
 
-echo "== 3. Boot splash theme (logo) =="
+echo "== 3. Boot splash theme =="
 THEME="$INC/usr/share/plymouth/themes/itad"
 mkdir -p "$THEME"
 
@@ -72,7 +73,7 @@ sprite.SetX(screen_w / 2 - logo.GetWidth() / 2);
 sprite.SetY(screen_h / 2 - logo.GetHeight() / 2);
 EOF
 
-echo "== 4. Hook: enable the ITAD plymouth theme inside the chroot =="
+echo "== 4. Hook: enable the ITAD plymouth theme =="
 mkdir -p "$HOOKS"
 cat > "$HOOKS/0100-set-plymouth-theme.chroot" <<'EOF'
 #!/bin/sh
@@ -98,25 +99,21 @@ cat > "$AUTOSTART_DIR/autostart" <<'EOF'
 EOF
 chmod +x "$AUTOSTART_DIR/autostart"
 
-echo "== 4c. Hide Debian text and Auto-start Xorg on tty1 login =="
-# 1. Clear the Debian welcome messages
-mkdir -p "$INC/etc"
+echo "== 4c. Hide Debian text and Auto-start Xorg =="
+# Clear the Debian welcome messages
 : > "$INC/etc/issue"
 : > "$INC/etc/issue.net"
 : > "$INC/etc/motd"
 
-# 2. Setup /etc/skel so the live user gets these files automatically
 SKEL_DIR="$INC/etc/skel"
 mkdir -p "$SKEL_DIR"
 
-# Tell startx to launch openbox-session
 cat > "$SKEL_DIR/.xinitrc" <<'EOF'
 #!/bin/sh
 exec openbox-session
 EOF
 chmod +x "$SKEL_DIR/.xinitrc"
 
-# Auto-run startx on tty1 login, clearing the screen and silencing output
 cat > "$SKEL_DIR/.bash_profile" <<'EOF'
 if [ -z "$DISPLAY" ] && [ "$(tty)" = "/dev/tty1" ]; then
     clear
@@ -152,6 +149,37 @@ EOF
 echo "== 4e. Fix permissions for the ITAD tool =="
 chmod +x "$INC/opt/itad-laptop/launch.sh" 2>/dev/null || true
 chmod +x "$INC/opt/itad-laptop/"*.py 2>/dev/null || true
+
+echo "== 4f. Hide Boot Menus (Syslinux & GRUB) =="
+# Syslinux (BIOS/Legacy)
+SYS_CFG_DIR="$CFG/bootloaders/isolinux"
+mkdir -p "$SYS_CFG_DIR"
+cat > "$SYS_CFG_DIR/isolinux.cfg" <<'EOF'
+include menu.cfg
+default vesamenu.c32
+prompt 0
+timeout 1
+EOF
+
+# GRUB (UEFI)
+GRUB_DIR="$INC/etc/default"
+mkdir -p "$GRUB_DIR"
+cat > "$GRUB_DIR/grub" <<'EOF'
+GRUB_DEFAULT=0
+GRUB_TIMEOUT=0
+GRUB_HIDDEN_TIMEOUT=0
+GRUB_HIDDEN_TIMEOUT_QUIET=true
+GRUB_DISABLE_RECOVERY=true
+EOF
+
+cat > "$HOOKS/0200-update-grub.chroot" <<'EOF'
+#!/bin/sh
+set -e
+if command -v update-grub >/dev/null 2>&1; then
+    update-grub
+fi
+EOF
+chmod +x "$HOOKS/0200-update-grub.chroot"
 
 echo "== 5. Build =="
 lb build
