@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-itad_run.py - run the full ITAD pipeline in one go (v1.0.3)
+itad_run.py - run the full ITAD pipeline in one go (v1.0.4)
 
 Runs, in this order:
   1. laptop_check.py  (read-only)   -> laptop_check.json
@@ -8,7 +8,6 @@ Runs, in this order:
   3. laptop_test.py   (read-mostly) -> laptop_test.json
 
 Stops on BLOCKED at step 1 (override with --continue-on-blocked).
-Wipe step asks for its own confirmation unless --yes-i-mean-it.
 """
 import argparse
 import json
@@ -86,6 +85,7 @@ def main():
 
     _verify_environment()
     
+    # Ensure output directory exists and is writable
     try:
         os.makedirs(args.out_dir, exist_ok=True)
         test_file = os.path.join(args.out_dir, ".write_test")
@@ -95,6 +95,28 @@ def main():
     except Exception as e:
         print(f"ERROR: Cannot write to output directory {args.out_dir}: {e}", file=sys.stderr)
         sys.exit(1)
+
+    # --- NEW: Ask the technician for details if we are running interactively ---
+    if sys.stdin.isatty() and args.asset_id == "AUTO":
+        try:
+            print("\n" + "="*60)
+            print(" ITAD TOOL - JOB DETAILS")
+            print("="*60)
+            print(f" Job ID: {args.job_id}")
+            
+            user_asset = input(" Enter Asset ID (or press Enter for AUTO): ").strip()
+            if user_asset:
+                args.asset_id = user_asset
+                
+            user_tech = input(" Enter Technician Name (or press Enter for AUTO): ").strip()
+            if user_tech:
+                args.tech = user_tech
+            
+            print("="*60 + "\n")
+        except (KeyboardInterrupt, EOFError):
+            print("\nAborted.")
+            sys.exit(4)
+    # -------------------------------------------------------------------------
 
     check_json = os.path.join(args.out_dir, "laptop_check.json")
     wipe_json = os.path.join(args.out_dir, "laptop_wipe.json")
