@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 """
-laptop_check.py - ITAD pre-wipe check (v3.1.4)  MULTI-PLATFORM
+laptop_check.py - ITAD pre-wipe check (v3.1.5)  MULTI-PLATFORM
 READ ONLY. Never wipes or writes to any internal drive.
 
+v3.1.5: Empty folders no longer count as evidence (false-positive fix).
+        Added "WHY IT IS BLOCKED" box under the banner and
+        "block_reasons" in the JSON report.
 v3.1.4: Added SSD/HDD detection and clearer storage display.
 v3.1.3: added CPU, RAM, and Chassis Type (Laptop/Desktop) detection.
 v3.1.2: updated default JSON path to match itad_run.py pipeline.
@@ -17,7 +20,7 @@ try:
 except Exception:
     NOW = datetime.now()
 
-VERSION = "3.1.4"
+VERSION = "3.1.5"
 
 BAD_SERIALS = {
     "", "none", "default string", "to be filled by o.e.m.",
@@ -483,6 +486,14 @@ def find_ci(root, relative):
     return cur
 
 
+def _is_empty_dir(path):
+    """True only if path is a folder that has nothing inside it."""
+    try:
+        return os.path.isdir(path) and not os.listdir(path)
+    except Exception:
+        return False
+
+
 def detect_platform():
     vendor = read_file("/sys/class/dmi/id/sys_vendor").lower()
     board = read_file("/sys/class/dmi/id/board_vendor").lower()
@@ -509,7 +520,7 @@ PLATFORM_LABEL = {
 
 def get_identity():
     d = "/sys/class/dmi/id/"
-    
+
     chassis_code = read_file(d + "chassis_type")
     device_type = "Unknown"
     if chassis_code in ["8", "9", "10", "14"]:
@@ -520,7 +531,7 @@ def get_identity():
         device_type = "Server"
     elif chassis_code == "30":
         device_type = "Tablet"
-    
+
     cpu_model = "Unknown CPU"
     try:
         with open("/proc/cpuinfo", "r") as f:
@@ -530,7 +541,7 @@ def get_identity():
                     break
     except Exception:
         pass
-        
+
     ram_gb = 0
     try:
         with open("/proc/meminfo", "r") as f:
@@ -603,7 +614,7 @@ def _has_live_mount(node):
 
 
 def scan_disks():
-    # Added ROTA to detect SSD vs HDD
+    # ROTA is used to detect SSD vs HDD
     rc, out, _ = run(["lsblk", "-J", "-b", "-o",
                       "NAME,PATH,TYPE,FSTYPE,SIZE,RM,TRAN,MODEL,MOUNTPOINT,ROTA"])
     internal, parts, notes = [], [], []
@@ -640,9 +651,12 @@ def scan_disks():
     for disk in data.get("blockdevices", []):
         if disk.get("type") != "disk" or _skip(disk):
             continue
-        
+
         # Determine if it is HDD (1) or SSD (0)
-        rota = int(disk.get("rota", 1))
+        try:
+            rota = int(disk.get("rota", 1))
+        except Exception:
+            rota = 1
         drive_type = "HDD" if rota == 1 else "SSD"
 
         internal.append({
@@ -795,6 +809,10 @@ def analyze_autopilot(root):
         hit = find_ci(root, rel)
         if not hit:
             continue
+        # v3.1.5: an empty folder is not evidence of anything
+        if _is_empty_dir(hit):
+            vlog("ignored empty folder: %s" % rel)
+            continue
         entry = {"description": desc, "path": rel.replace("/", "\\")}
         if parse and rel.lower().endswith(".json"):
             parsed = _parse_autopilot_json(hit)
@@ -820,7 +838,8 @@ def analyze_autopilot(root):
                 a["mdm"].append(label)
 
     for rel, label in AZURE_AD_ITEMS:
-        if find_ci(root, rel):
+        hit = find_ci(root, rel)
+        if hit and not _is_empty_dir(hit):
             a["azure_ad"].append({"description": label,
                                   "path": rel.replace("/", "\\")})
 
@@ -873,16 +892,19 @@ def device_box(platform, ident, internal):
     rows += kv("Model", ml)
     rows += kv("Serial", ident["serial"], ("bold",))
     rows += kv("CPU", ident.get("cpu", "-"))
-    rows += kv("RAM", f"{ident.get('ram_gb', 0)} GB")
-    
-    # UPDATED: Clear storage display with SSD/HDD type
+    rows += kv("RAM", "%s GB" % ident.get("ram_gb", 0))
+
+    # Clear storage display with SSD/HDD type
     if internal:
         for d in internal:
-            drive_desc = f"{d.get('model') or 'Unknown'} ({d.get('drive_type', 'Drive')}) - {d.get('size_gb', 0)} GB"
+            drive_desc = "%s (%s) - %s GB" % (
+                d.get("model") or "Unknown",
+                d.get("drive_type", "Drive"),
+                d.get("size_gb", 0))
             rows += kv("Storage", drive_desc)
     else:
         rows += kv("Storage", "none found", ("yellow",))
-        
+
     rows += kv("BIOS", "%s %s (%s)" % (ident["bios_vendor"],
                                        ident["bios_version"],
                                        ident["bios_date"]))
@@ -1011,6 +1033,19 @@ def cannot_box(encrypted, unreadable, cannot):
         rows += item(paint(ICON["warn"], "yellow"), s)
     if rows:
         box("COULD NOT CHECK", rows, "yellow")
+
+
+def why_box(reasons):
+    """Short list of exactly what triggered BLOCKED, shown above the menu."""
+    if not reasons:
+        return
+    rows = []
+    for r in reasons[:8]:
+        rows += item(paint(ICON["bad"], "bold", "red"), r)
+    if len(reasons) > 8:
+        rows += para("... and %d more (see the JSON report)"
+                     % (len(reasons) - 8), ("dim",))
+    box("WHY IT IS BLOCKED", rows, "red")
 
 
 # =============================================================================
@@ -1209,6 +1244,14 @@ def main():
     else:
         ap_result = "UNKNOWN"
 
+    # What exactly caused BLOCKED (shown on screen and saved in the JSON)
+    block_reasons = list(abs_signs)
+    if ap_state == "ACTIVE":
+        for e in autopilot_analysis["active"]:
+            block_reasons.append("%s: %s" % (e["description"], e["path"]))
+        for k in autopilot_analysis["mdm"]:
+            block_reasons.append(k)
+
     report = {
         "tool": "laptop_check.py", "version": VERSION,
         "time": NOW.isoformat(), "platform": platform,
@@ -1223,6 +1266,7 @@ def main():
         "autopilot_analysis": autopilot_analysis,
         "mac_enrolment": mac_enrol,
         "warnings": warns,
+        "block_reasons": block_reasons if result == "BLOCKED" else [],
         "result": result,
     }
 
@@ -1246,6 +1290,7 @@ def main():
     if result == "BLOCKED":
         big_banner(["", "%s  %s" % (ICON["bad"], spaced("BLOCKED")),
                     "DO NOT WIPE.  Escalate.", ""], "red")
+        why_box(block_reasons)
     elif result == "CANNOT CHECK":
         big_banner(["", "%s  %s" % (ICON["warn"], spaced("CANNOT CHECK")),
                     "DO NOT WIPE YET.  Manager decision required.", ""],
