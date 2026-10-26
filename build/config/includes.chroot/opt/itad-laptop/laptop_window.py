@@ -1,7 +1,18 @@
 #!/usr/bin/env python3
 """
-laptop_window.py - ITAD Laptop window (v1.2.0)
+laptop_window.py - ITAD Laptop window (v1.3.0)
 This is the GRAPHICAL USER INTERFACE (GUI).
+
+v1.3.0
+  - TEST MODE (Settings > Test mode). For testing the tool on your own
+    laptops (for example one that is still in MDM / Intune):
+      * "Test components only" on the New job screen skips the check
+        and the wipe and goes straight to the component tests.
+      * After a check, "Skip wipe - test components" is always allowed,
+        even when the result is BLOCKED.
+      * Nothing is ever erased in Test mode.
+      * Every report says TEST MODE and can never show PASS.
+    Test mode is OFF after every boot. It stays on for "Next laptop".
 
 v1.2.0
   - New look: dark blue design with a left menu (Home, New Job, Settings,
@@ -39,7 +50,7 @@ try:
 except Exception:
     TZ = None
 
-VERSION = "1.2.0"
+VERSION = "1.3.0"
 TOOLS_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # --- THESE ARE THE FILES THIS GUI WILL RUN ---
@@ -642,7 +653,8 @@ def obs_lines(obs):
 def render_txt(rep):
     L = []
     add = L.append
-    add("ITAD LAPTOP REPORT")
+    add("ITAD LAPTOP REPORT" + ("   *** TEST MODE ***" if rep.get("test_mode")
+                                 else ""))
     add("RESULT: %s" % rep["overall"])
     for r in rep["reasons"]:
         add("  - %s" % r)
@@ -1081,6 +1093,8 @@ class App:
     def __init__(self, tk, ttk, messagebox, root, dry_run, quick, windowed):
         self.tk, self.ttk, self.mb, self.root = tk, ttk, messagebox, root
         self.dry, self.quick = dry_run, quick
+        # Test mode is never saved to disk: it is OFF after every boot.
+        self.test_mode = os.environ.get("ITAD_TEST_MODE") == "1"
         self.q = queue.Queue()
         self.log = []
         self.wiping = False
@@ -1284,6 +1298,11 @@ class App:
             tk.Label(head, text="  DRY RUN - nothing will be erased  ",
                      font=self.F(10, True), fg=NAVY, bg=WARN).pack(
                 side="right", padx=4)
+        self.h_test = tk.Label(head, text="  TEST MODE - no wipe, not for "
+                                          "customer laptops  ",
+                               font=self.F(10, True), fg="white", bg=RED_BAN)
+        if self.test_mode:
+            self.h_test.pack(side="right", padx=4)
         tk.Frame(root, bg=BORDER, height=1).pack(fill="x")
 
         # footer
@@ -2034,8 +2053,76 @@ class App:
         left, right, mid = self.bar(pg)
         self.btn(left, "Sign out", self.sign_out, "ghost").pack(side="left")
         self.start_msg = mid
-        Pill(self, right, "Start checks", self.start_checks, width=230,
-             height=48, icon="play").pack()
+        self.test_only_btn = self.btn(right, "Test components only",
+                                      self.start_test_only, "outline")
+        self.start_pill = Pill(self, right, "Start checks", self.start_checks,
+                               width=230, height=48, icon="play")
+        self.start_pill.pack(side="right")
+        self.refresh_test_mode()
+
+    def refresh_test_mode(self):
+        """Show or hide everything that belongs to Test mode."""
+        if not hasattr(self, "test_only_btn"):
+            return
+        if self.test_mode:
+            self.test_only_btn.pack(side="left", padx=(0, self.px(12)))
+            self.h_test.pack(side="right", padx=4)
+        else:
+            self.test_only_btn.pack_forget()
+            self.h_test.pack_forget()
+
+    def job_ready(self):
+        if not self.tech():
+            self.show_login()
+            return False
+        if not self.job() or not self.asset():
+            self.start_msg.configure(text="Job ID and Asset ID are needed.",
+                                     fg=WARN)
+            return False
+        self.start_msg.configure(text="")
+        return True
+
+    def start_test_only(self):
+        """Test mode: no check, no wipe, straight to the component tests."""
+        if not self.test_mode or not self.job_ready():
+            return
+        self.job_active = True
+        self.s["check"] = None
+        self.set_stage("check", "warn", "Test mode - not checked")
+        self.test_mode_skip_wipe()
+
+    def test_mode_skip_wipe(self):
+        """Test mode: never wipe, run the component tests."""
+        self.s["wipe_state"] = "SKIPPED (TEST MODE)"
+        self.show("wipe")
+        self.set_stage("wipe", "warn", "Test mode - NOT wiped")
+        self.w_title.configure(text="Test mode: wipe skipped (nothing erased)",
+                               fg=WARN)
+        self.w_targets.configure(text="")
+        self.hide_all_wipe_parts()
+        self.start_auto_tests()
+
+    def toggle_test_mode(self):
+        if not self.test_mode:
+            if self.job_active:
+                self.mb.showinfo("Test mode", "Finish this job (or press "
+                                 "Next laptop) before turning on Test mode.")
+                return
+            if not self.mb.askyesno(
+                    "Turn on Test mode?",
+                    "Test mode lets you skip the Absolute / enrolment check "
+                    "and the wipe, to test components on your own laptops."
+                    "\n\nNothing will be erased. Reports will say TEST MODE "
+                    "and will never show PASS.\n\nDo NOT use it for customer "
+                    "laptops. Turn it on?"):
+                return
+            self.test_mode = True
+            os.environ["ITAD_TEST_MODE"] = "1"
+        else:
+            self.test_mode = False
+            os.environ.pop("ITAD_TEST_MODE", None)
+        self.refresh_test_mode()
+        self.refresh_settings()
 
     def start_checks(self):
         if not self.tech():
@@ -2078,8 +2165,19 @@ class App:
         self.c_again = self.btn(right, "Run check again", self.run_check,
                                 "ghost")
         self.c_again.pack(side="left", padx=(0, self.px(10)))
-        self.c_next = self.btn(right, "Continue to wipe", self.enter_wipe)
+        self.c_next = self.btn(right, "Continue to wipe", self.enter_wipe,
+                               width=270)
         self.c_next.pack(side="left")
+
+    def test_mode_next(self):
+        """Set the 'next' button on the check screen for the current mode."""
+        if self.test_mode:
+            self.c_next.configure(text="Skip wipe - test components",
+                                  command=self.test_mode_skip_wipe,
+                                  state="normal")
+        else:
+            self.c_next.configure(text="Continue to wipe",
+                                  command=self.enter_wipe)
 
     def banner(self, text, kind):
         bg, fg = {"ok": (GREEN_BAN, NAVY), "bad": (RED_BAN, "white"),
@@ -2095,6 +2193,9 @@ class App:
         self.c_enr_note.configure(text="")
         self.c_again.configure(state="disabled")
         self.c_next.configure(state="disabled")
+        if not self.test_mode:
+            self.c_next.configure(text="Continue to wipe",
+                                  command=self.enter_wipe)
         self.set_stage("check", "run", "Checking Absolute and enrolment...")
         if os.path.exists(self.p_check):
             try:
@@ -2111,11 +2212,13 @@ class App:
         self.c_status.configure(text="")
         self.c_again.configure(state="normal")
         if not data:
+            self.test_mode_next()
             self.banner("CHECK DID NOT RUN", "bad")
             self.c_enr_note.configure(text="\n".join(self.log[-6:]) or
                                       "laptop_check.py gave no result.")
             self.set_stage("check", "bad", "Check did not run")
             return
+        self.test_mode_next()
         result = data.get("result", "?")
         ar = data.get("absolute_result", "?")
         er = data.get("autopilot_result", "?")
@@ -2246,6 +2349,9 @@ class App:
         self.w_confirm.pack_forget()
 
     def enter_wipe(self):
+        if self.test_mode:
+            self.test_mode_skip_wipe()
+            return
         self.show("wipe")
         self.set_stage("wipe", "run", "Checking drives...")
         self.w_title.configure(text="Checking drives...", fg=TEXT)
@@ -2321,6 +2427,9 @@ class App:
         self.start_auto_tests()
 
     def do_wipe(self):
+        if self.test_mode:
+            self.test_mode_skip_wipe()
+            return
         if self.dry:
             self.s["wipe_state"] = "DRY RUN"
             self.s["wipe"] = self.s.get("wipe_dry")
@@ -3010,6 +3119,11 @@ class App:
                          for d in self.disks) or "-"
         overall, reasons = compute_overall(self.s["wipe_state"],
                                            wipe.get("overall"), tests)
+        if self.test_mode:
+            if overall == "PASS":
+                overall = "INCOMPLETE"
+            reasons.insert(0, "TEST MODE - check / wipe skipped, NOT for "
+                              "customer or resale use")
         er = chk.get("autopilot_result", "?")
         obs = dict(self.read_observations())
         return {
@@ -3026,9 +3140,12 @@ class App:
             "screen": screen_text(self.screen),
             "screen_details": self.screen or {},
             "storage": stor,
-            "absolute": chk.get("absolute_result", "?"),
-            "enrolment": {"CLEAN": "CLEAN", "BLOCKED": "ACTIVE",
-                          "UNKNOWN": "NOT CHECKED"}.get(er, "PAST ENROLMENT"),
+            "absolute": (chk.get("absolute_result", "?") if chk else
+                         "NOT CHECKED (TEST MODE)"),
+            "enrolment": ({"CLEAN": "CLEAN", "BLOCKED": "ACTIVE",
+                           "UNKNOWN": "NOT CHECKED"}.get(er, "PAST ENROLMENT")
+                          if chk else "NOT CHECKED (TEST MODE)"),
+            "test_mode": self.test_mode,
             "check_result": chk.get("result", "?"),
             "wipe_state": self.s["wipe_state"],
             "wipe_devices": wipe.get("devices") or [],
@@ -3166,6 +3283,14 @@ class App:
                     "Normal (wipe is real)")
         mode.append("Quick tests" if self.quick else "Full tests")
         self.lbl(j, "\n".join(mode), 11).pack(anchor="w")
+        self.lbl(j, "TEST MODE", 9, True, fg=MUTED).pack(
+            anchor="w", pady=(self.px(14), 0))
+        self.st_test = self.lbl(j, "", 11, True, wraplength=320)
+        self.st_test.pack(anchor="w")
+        self.st_test_btn = self.btn(j, "Turn Test mode ON",
+                                    self.toggle_test_mode, "outline",
+                                    width=230)
+        self.st_test_btn.pack(anchor="w", pady=(self.px(6), 0))
         left, right, mid = self.bar(pg)
         self.btn(left, "Home", lambda: self.show("home"), "ghost").pack()
 
@@ -3185,6 +3310,13 @@ class App:
         if nopw:
             txt += "\nNo password yet: " + ", ".join(nopw)
         self.st_techs.configure(text=txt)
+        if self.test_mode:
+            self.st_test.configure(text="ON - check and wipe can be skipped, "
+                                        "nothing is erased", fg=BAD)
+            self.st_test_btn.configure(text="Turn Test mode OFF")
+        else:
+            self.st_test.configure(text="OFF - normal work", fg=OK)
+            self.st_test_btn.configure(text="Turn Test mode ON")
 
     def build_about(self):
         tk = self.tk
