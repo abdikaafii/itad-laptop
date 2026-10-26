@@ -1,9 +1,13 @@
 #!/usr/bin/env python3
 """
-laptop_test.py - ITAD component test (v1.1.3)  READ-MOSTLY
+laptop_test.py - ITAD component test (v1.1.4)  READ-MOSTLY
 
 Step 2 of the ITAD pipeline. Runs AFTER laptop_check.py and the wipe.
 
+v1.1.4: battery health is ALWAYS written in the result notes (for
+        example "Health 92.3% - cycles 120 - charge 85% (Charging)"), not
+        only when it is low, so the window and the report can show it.
+        Health above 100% (new batteries) is shown as 100%.
 v1.1.3: fixes found while checking it against laptop_window.py:
   - RAM: memtester stopped at the time limit was marked FAIL. Now it is
     PASS ("no errors found") unless memtester really reported a failure.
@@ -66,7 +70,7 @@ try:
 except Exception:
     NOW = datetime.now()
 
-VERSION = "1.1.3"
+VERSION = "1.1.4"
 ALL_TESTS = ["cpu", "ram", "drive", "battery", "screen", "keyboard",
              "touchpad", "webcam", "speakers", "wifi", "usb"]
 # The component name each test puts in its result (used if a test crashes,
@@ -772,12 +776,21 @@ def test_battery():
             unit = "mAh"
         try:
             di, fi = int(design), int(full)
-            health = round(fi / di * 100, 1)
+            health = min(100.0, round(fi / di * 100, 1))
             b["unit"] = unit
             b["design_mwh"] = di / 1000
             b["full_mwh"] = fi / 1000
             b["health_pct"] = health
             health_seen = True
+            extra = []
+            if b["cycle_count"] and b["cycle_count"] != "0":
+                extra.append("cycles %s" % b["cycle_count"])
+            if b["capacity"]:
+                extra.append("charge %s%%%s" % (
+                    b["capacity"],
+                    (" (%s)" % b["status"]) if b["status"] else ""))
+            r["notes"].append("Health %s%%%s" % (
+                health, ("  -  " + "  -  ".join(extra)) if extra else ""))
             if health < 60:
                 r["notes"].append(
                     "%s: battery health %s%% (below 60%%)" % (bp, health))
@@ -797,6 +810,8 @@ def test_battery():
                 ("dim",))
         except Exception:
             say("%s: health data unavailable" % bp, ("yellow",))
+            if b.get("capacity"):
+                r["notes"].append("Health unknown  -  charge %s%%" % b["capacity"])
         out.append(b)
     r["details"]["batteries"] = out
 

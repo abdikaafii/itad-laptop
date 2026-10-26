@@ -20,8 +20,10 @@
 # v3 - smooth, fast boot:
 #   * Animated boot screen in the LaptopSeal colours: glowing logo,
 #     spinning ring, progress bar that never stops, changing status text.
-#   * The boot screen stays up until the LaptopSeal window opens: no black
-#     gap and no "user (automatic login)" text.
+#   * The boot screen picture stays until the LaptopSeal window opens.
+#   * v3.1: green boot text (GRUB + Linux) instead of a dark screen before
+#     the boot screen starts; plymouth quits normally (fixes the freeze and
+#     glitching on some laptops).
 #   * Faster: system files packed with zstd (much quicker to read from a
 #     USB stick), no waiting for the network, unused services switched off.
 set -euo pipefail
@@ -41,7 +43,7 @@ lb config --distribution trixie --architectures amd64 \
   --binary-images iso-hybrid --bootloaders "syslinux,grub-efi" \
   --debian-installer none --memtest none \
   --iso-application "ITAD Laptop Tool" --iso-volume "ITAD_LAPTOP" \
-  --bootappend-live "boot=live components quiet splash loglevel=0 rd.systemd.show_status=false systemd.show_status=false rd.udev.log_level=3 udev.log_level=3 vt.global_cursor_default=0 plymouth.ignore-serial-consoles"
+  --bootappend-live "boot=live components splash loglevel=6 rd.systemd.show_status=false systemd.show_status=false rd.udev.log_level=3 udev.log_level=3 vt.global_cursor_default=0 plymouth.ignore-serial-consoles vt.default_red=0,170,0,170,0,170,0,40,85,255,85,255,85,255,85,90 vt.default_grn=0,0,170,85,0,0,170,220,85,85,255,255,85,85,255,255 vt.default_blu=0,0,0,0,170,170,170,90,85,85,85,85,255,255,255,140"
 
 echo "== 2b. Packages =="
 # MUST-HAVE packages (all exist in Debian 13). If one of these is missing
@@ -321,19 +323,26 @@ for u in NetworkManager-wait-online.service systemd-networkd-wait-online.service
          avahi-daemon.service avahi-daemon.socket apt-daily.timer \
          apt-daily-upgrade.timer man-db.timer e2scrub_all.timer \
          e2scrub_reap.service fstrim.timer anacron.timer anacron.service \
-         unattended-upgrades.service plymouth-quit.service \
-         plymouth-quit-wait.service; do
+         unattended-upgrades.service; do
   systemctl mask "$u" >/dev/null 2>&1 || true
 done
+systemctl unmask plymouth-quit.service plymouth-quit-wait.service >/dev/null 2>&1 || true
 systemctl enable itad-splash-timeout.service >/dev/null 2>&1 || true
 exit 0
 EOF
-# Safety net: if the window never starts, take the boot screen away after
-# 2 minutes so the technician can see what is wrong.
+# Plymouth quits when the system is ready, but keeps its last picture on
+# screen (--retain-splash) until the LaptopSeal window opens on top.
+# (v3 kept plymouth running until X started: on some laptops plymouth
+# and X then fought over the screen = freeze and glitching.)
+PQ="$INC/etc/systemd/system/plymouth-quit.service.d"; mkdir -p "$PQ"
+printf '%s\n' "[Service]" "ExecStart=" \
+  "ExecStart=-/usr/bin/plymouth quit --retain-splash" > "$PQ/itad.conf"
+# Safety net: if the boot screen is still up after 1 minute, remove it so
+# the technician can see what is wrong.
 mkdir -p "$INC/etc/systemd/system"
 printf '%s\n' "[Unit]" "Description=ITAD: remove boot screen if the window never starts" \
   "[Service]" "Type=simple" \
-  "ExecStart=/bin/sh -c 'sleep 120; /usr/bin/plymouth quit || true'" \
+  "ExecStart=/bin/sh -c 'sleep 60; /usr/bin/plymouth quit || true'" \
   "[Install]" "WantedBy=multi-user.target" \
   > "$INC/etc/systemd/system/itad-splash-timeout.service"
 
@@ -402,7 +411,15 @@ if [ -d "$G" ]; then
     sed -i -e '/background_image/d' -e '/insmod png/d' -e '/^[[:space:]]*set theme=/d' "$f"
   done
   rm -f "$G"/*.png
-  printf 'set color_normal=black/black\nset color_highlight=black/black\nset menu_color_normal=black/black\nset menu_color_highlight=black/black\n' > "$G/theme.cfg"
+  printf 'set color_normal=light-green/black\nset color_highlight=black/black\nset menu_color_normal=black/black\nset menu_color_highlight=black/black\n' > "$G/theme.cfg"
+  # Green progress lines while GRUB loads the system from the USB stick
+  for f in "$G"/*.cfg; do
+    [ -f "$f" ] || continue
+    sed -i \
+      -e 's/^\([[:space:]]*\)linux\([[:space:]]\)/\1set color_normal=light-green\/black\n\1echo "  > ITAD LaptopSeal"\n\1echo "  > Loading Linux kernel..."\n\1linux\2/' \
+      -e 's/^\([[:space:]]*\)initrd\([[:space:]]\)/\1echo "  > Loading drivers and firmware (a few seconds)..."\n\1initrd\2/' \
+      "$f"
+  done
   for f in "$G"/*.cfg; do sed -i 's/^\([[:space:]]*\)set timeout=.*/\1set timeout=0/' "$f"; done
   [ -f "$G/config.cfg" ] && printf '\nset default=0\nset timeout=0\nset timeout_style=hidden\n' >> "$G/config.cfg"
   if [ -f "$G/grub.cfg" ]; then

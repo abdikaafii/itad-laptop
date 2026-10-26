@@ -1,7 +1,21 @@
 #!/usr/bin/env python3
 """
-laptop_window.py - ITAD Laptop window (v1.3.0)
+laptop_window.py - ITAD Laptop window (v1.4.0)
 This is the GRAPHICAL USER INTERFACE (GUI).
+
+v1.4.0
+  - Keyboard test: number pad (Num Lock, 0-9, / * - + . Enter) shown on
+    the right. It only has to be tested if the laptop has one: as soon
+    as one number-pad key is pressed, all number-pad keys are needed.
+  - New Webcam test: live camera picture, then Camera works / Picture
+    bad / No camera.
+  - New USB ports test: plug a USB stick into each port; every port is
+    listed as it is found, then All ports work / A port does not work.
+  - Every result can be changed by the technician: tap a result
+    (for example Battery) and choose PASS, FAIL or Not fitted.
+    The report says it was set by the technician.
+  - Battery shows its health % next to the result.
+  - On-screen test buttons are in two rows so they always fit the screen.
 
 v1.3.0
   - TEST MODE (Settings > Test mode). For testing the tool on your own
@@ -27,6 +41,7 @@ v1.1.0
   - Real RAM size, type, speed and slots. Screen size and resolution.
 """
 import argparse
+import base64
 import glob
 import hashlib
 import hmac
@@ -50,7 +65,7 @@ try:
 except Exception:
     TZ = None
 
-VERSION = "1.3.0"
+VERSION = "1.4.0"
 TOOLS_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # --- THESE ARE THE FILES THIS GUI WILL RUN ---
@@ -99,13 +114,13 @@ STD_RAM_GB = [1, 2, 3, 4, 6, 8, 12, 16, 20, 24, 32, 36, 40, 48, 64, 96, 128,
               192, 256]
 LOCATIONS = ["Warehouse DPA3 Test Bay 1", "Warehouse DPA3 Test Bay 2",
              "Warehouse DPA3 Test Bay 3", "Warehouse DPA3 Test Bay 4", "Other"]
-AUTO_TESTS = "cpu,ram,drive,battery,webcam,wifi,usb"
+AUTO_TESTS = "cpu,ram,drive,battery,wifi"
 COMPONENTS = ["CPU", "RAM", "Drive Health", "Battery", "Webcam", "Wi-Fi",
               "USB", "Screen", "Keyboard", "Touchpad", "Touchscreen",
               "Speakers", "Microphone"]
 # On-screen tests the technician does (in button order)
 MANUAL = ["Screen", "Keyboard", "Touchpad", "Touchscreen", "Speakers",
-          "Microphone"]
+          "Microphone", "Webcam", "USB"]
 # "N/A" = the laptop does not have this part (e.g. no touchscreen).
 # It is not a problem and does not stop a PASS.
 NOT_FITTED = "N/A"
@@ -134,9 +149,29 @@ KB_ROWS = [
     [("CTRL", "CTRL"), ("ALT", "ALT"), ("SPACE", "SPACE"), ("ALT", "RALT"),
      ("<", "<"), ("^", "^"), ("v", "v"), (">", ">")],
 ]
+# Number pad (only needed if the laptop has one). Each key: (label, id).
+NUMPAD_ROWS = [
+    [("NUM", "KP_NUM"), ("/", "KP_/"), ("*", "KP_*"), ("-", "KP_-")],
+    [("7", "KP_7"), ("8", "KP_8"), ("9", "KP_9"), ("+", "KP_+")],
+    [("4", "KP_4"), ("5", "KP_5"), ("6", "KP_6")],
+    [("1", "KP_1"), ("2", "KP_2"), ("3", "KP_3"), ("ENT", "KP_ENT")],
+    [("0", "KP_0"), (".", "KP_.")],
+]
+# Number-pad keys give different names with Num Lock on or off.
+NUMPAD_KEYMAP = {
+    "Num_Lock": "KP_NUM", "KP_Divide": "KP_/", "KP_Multiply": "KP_*",
+    "KP_Subtract": "KP_-", "KP_Add": "KP_+", "KP_Enter": "KP_ENT",
+    "KP_0": "KP_0", "KP_Insert": "KP_0", "KP_1": "KP_1", "KP_End": "KP_1",
+    "KP_2": "KP_2", "KP_Down": "KP_2", "KP_3": "KP_3", "KP_Next": "KP_3",
+    "KP_Page_Down": "KP_3", "KP_4": "KP_4", "KP_Left": "KP_4",
+    "KP_5": "KP_5", "KP_Begin": "KP_5", "KP_6": "KP_6", "KP_Right": "KP_6",
+    "KP_7": "KP_7", "KP_Home": "KP_7", "KP_8": "KP_8", "KP_Up": "KP_8",
+    "KP_9": "KP_9", "KP_Prior": "KP_9", "KP_Page_Up": "KP_9",
+    "KP_Decimal": "KP_.", "KP_Delete": "KP_.", "KP_Separator": "KP_.",
+}
 KEYMAP = {
     "Escape": "ESC", "Tab": "TAB", "Caps_Lock": "CAPS", "Return": "ENTER",
-    "KP_Enter": "ENTER", "space": "SPACE", "BackSpace": "BKSP",
+    "space": "SPACE", "BackSpace": "BKSP",
     "Shift_L": "LSHIFT", "Shift_R": "RSHIFT", "Control_L": "CTRL",
     "Control_R": "CTRL", "Alt_L": "ALT", "Alt_R": "RALT",
     "ISO_Level3_Shift": "RALT", "Left": "<", "Right": ">", "Up": "^",
@@ -2300,22 +2335,31 @@ class App:
             r, c = (n + 1, 0) if n < half else (n - half + 1, 2)
             self.lbl(t, comp, 11).grid(row=r, column=c, sticky="w",
                                        padx=(0, self.px(18)), pady=self.px(3))
-            lab = self.lbl(t, "waiting", 11, True, fg=MUTED)
+            lab = self.lbl(t, "waiting", 11, True, fg=MUTED, cursor="hand2")
             lab.grid(row=r, column=c + 1, sticky="w", pady=self.px(3),
                      padx=(0, self.px(30)))
+            lab.bind("<Button-1>", lambda e, cp=comp: self.change_result(cp))
             self.test_rows[comp] = lab
+        self.lbl(t, "Tap a result to change it (PASS / FAIL / Not fitted).",
+                 9, fg=MUTED).grid(row=half + 1, column=0, columnspan=4,
+                                   sticky="w", pady=(self.px(6), 0))
         mrow = tk.Frame(t, bg=NAVY)
-        mrow.grid(row=half + 1, column=0, columnspan=4, sticky="w",
-                  pady=(self.px(14), 0))
-        for comp, fn in (("Screen", self.manual_screen),
-                         ("Keyboard", self.manual_keyboard),
-                         ("Touchpad", self.manual_touchpad),
-                         ("Touchscreen", self.manual_touchscreen),
-                         ("Speakers", self.manual_speakers),
-                         ("Microphone", self.manual_microphone)):
-            b = self.btn(mrow, comp + " test", fn, "ghost")
+        mrow.grid(row=half + 2, column=0, columnspan=4, sticky="w",
+                  pady=(self.px(10), 0))
+        tests = (("Screen", self.manual_screen),
+                 ("Keyboard", self.manual_keyboard),
+                 ("Touchpad", self.manual_touchpad),
+                 ("Touchscreen", self.manual_touchscreen),
+                 ("Speakers", self.manual_speakers),
+                 ("Microphone", self.manual_microphone),
+                 ("Webcam", self.manual_webcam),
+                 ("USB", self.manual_usb))
+        for n, (comp, fn) in enumerate(tests):
+            label = "USB ports test" if comp == "USB" else comp + " test"
+            b = self.btn(mrow, label, fn, "ghost", width=190)
             b.configure(state="disabled")
-            b.pack(side="left", padx=(0, self.px(8)))
+            b.grid(row=n // 4, column=n % 4, sticky="w",
+                   padx=(0, self.px(8)), pady=(0, self.px(8)))
             self.manual_btns[comp] = b
         left, right, mid = self.bar(pg)
         self.w_power = self.btn(left, "Home", lambda: self.show("home"),
@@ -2327,7 +2371,7 @@ class App:
         self.w_next.configure(state="disabled")
         self.w_next.pack()
 
-    def set_row(self, comp, status):
+    def set_row(self, comp, status, detail=""):
         lab = self.test_rows.get(comp)
         if not lab:
             return
@@ -2335,6 +2379,10 @@ class App:
                 "PASS": "PASS", "WARN": "WARN", "FAIL": "FAIL",
                 "SKIP": "skipped", NOT_FITTED: "not fitted"}.get(status,
                                                                  status)
+        if comp in self.s.get("override", {}):
+            text += " (set)"
+        if detail:
+            text += "   " + detail
         color = {"RUN": CYAN, "PASS": OK, "WARN": WARN,
                  "FAIL": BAD}.get(status, MUTED)
         lab.configure(text=text, fg=color)
@@ -2512,7 +2560,8 @@ class App:
         got = {}
         for r in self.s["auto"]:
             got[r.get("component")] = r
-            self.set_row(r.get("component"), r.get("status", "WARN"))
+            self.set_row(r.get("component"), r.get("status", "WARN"),
+                         self.result_detail(r))
         for comp in COMPONENTS:
             if comp not in MANUAL and comp not in got:
                 self.set_row(comp, "WARN")
@@ -2530,6 +2579,74 @@ class App:
             b.configure(state="disabled" if self.s["manual"].get(comp, {})
                         .get("status") == NOT_FITTED else "normal")
         self.w_next.configure(state="normal")
+
+    def result_detail(self, r):
+        """Short extra text next to a result (battery health %)."""
+        if r.get("component") == "Battery":
+            for b in (r.get("details") or {}).get("batteries") or []:
+                if b.get("health_pct") is not None:
+                    return "%.0f%% health" % b["health_pct"]
+            if r.get("status") == "SKIP":
+                return "no battery"
+        return ""
+
+    def change_result(self, comp):
+        """Let the technician set PASS / FAIL / Not fitted for a result."""
+        if self.wiping:
+            return
+        tk = self.tk
+        cur = None
+        for t in self.collect_tests():
+            if t.get("component") == comp:
+                cur = t
+        win = tk.Toplevel(self.root)
+        win.title("Change result")
+        win.configure(bg=NAVY)
+        win.transient(self.root)
+        sw, sh = win.winfo_screenwidth(), win.winfo_screenheight()
+        w, h = self.px(560), self.px(330)
+        win.geometry("%dx%d+%d+%d" % (w, h, (sw - w) // 2, (sh - h) // 2))
+        self.lbl(win, comp, 16, True).pack(pady=(self.px(16), 2))
+        now_txt = "Now: %s" % ((cur or {}).get("status") or "not tested")
+        notes = "; ".join((cur or {}).get("notes") or [])
+        if notes:
+            now_txt += "\n" + notes[:160]
+        self.lbl(win, now_txt, 10, fg=MUTED, wraplength=w - 40).pack(
+            pady=(0, self.px(10)))
+        self.lbl(win, "Note (optional):", 10, fg=MUTED).pack(anchor="w",
+                                                             padx=20)
+        v = tk.StringVar(value="")
+        e = self.entry(win, v)
+        e.pack(fill="x", padx=20, pady=(2, self.px(12)), ipady=3)
+        bf = tk.Frame(win, bg=NAVY)
+        bf.pack()
+
+        def choose(status):
+            note = v.get().strip()
+            msg = "Set to %s by %s" % (status if status != NOT_FITTED
+                                       else "Not fitted", self.tech() or
+                                       "technician")
+            if note:
+                msg += ": " + note
+            win.destroy()
+            if comp in MANUAL:
+                self.s.setdefault("override", {}).pop(comp, None)
+                self.finish_manual(comp, status, [msg])
+            else:
+                self.s.setdefault("override", {})[comp] = {
+                    "status": status, "note": msg}
+                self.set_row(comp, status,
+                             self.result_detail(cur or {}))
+        self.btn(bf, "PASS", lambda: choose("PASS")).pack(side="left",
+                                                          padx=4)
+        self.btn(bf, "FAIL", lambda: choose("FAIL"), "danger").pack(
+            side="left", padx=4)
+        self.btn(bf, "Not fitted", lambda: choose(NOT_FITTED),
+                 "outline").pack(side="left", padx=4)
+        self.btn(bf, "Cancel", win.destroy, "ghost").pack(side="left",
+                                                          padx=4)
+        win.grab_set()
+        e.focus_set()
 
     def test_summary(self):
         # parts the laptop does not have (N/A) are left out of the count
@@ -2601,43 +2718,86 @@ class App:
         win.title("Keyboard test")
         win.configure(bg=NAVY)
         sw, sh = win.winfo_screenwidth(), win.winfo_screenheight()
-        w, h = min(self.px(1050), sw), min(self.px(460), sh)
+        w, h = min(self.px(1320), sw), min(self.px(480), sh)
         win.geometry("%dx%d+%d+%d" % (w, h, max(0, (sw - w) // 2),
                                       max(0, (sh - h) // 2)))
         tk.Label(win, text="Press every key. Keys turn green when they work.",
                  font=self.F(12, True), fg=TEXT, bg=NAVY).pack(
             pady=(self.px(14), self.px(8)))
         cells, seen = {}, set()
+        pads = {}
+        state = {"numpad": False}
+        board = tk.Frame(win, bg=NAVY)
+        board.pack()
+        main = tk.Frame(board, bg=NAVY)
+        main.pack(side="left", anchor="n")
         for row in KB_ROWS:
-            rf = tk.Frame(win, bg=NAVY)
+            rf = tk.Frame(main, bg=NAVY)
             rf.pack(pady=3)
             for label, kid in row:
                 c = tk.Label(rf, text=label, font=self.F(10, True), fg=TEXT,
                              bg=BORDER, width=max(3, len(label) + 1), pady=6)
                 c.pack(side="left", padx=2)
                 cells[kid] = c
+        # number pad on the right (greyed until a number-pad key is used)
+        npf = tk.Frame(board, bg=NAVY)
+        npf.pack(side="left", anchor="n", padx=(self.px(26), 0))
+        np_title = tk.Label(npf, text="Number pad\n(only if fitted)",
+                            font=self.F(9, True), fg=MUTED, bg=NAVY)
+        np_title.pack(pady=(0, 4))
+        for row in NUMPAD_ROWS:
+            rf = tk.Frame(npf, bg=NAVY)
+            rf.pack(anchor="w", pady=3)
+            for label, kid in row:
+                c = tk.Label(rf, text=label, font=self.F(10, True), fg=MUTED,
+                             bg=CARD2, width=4, pady=6)
+                c.pack(side="left", padx=2)
+                pads[kid] = c
         counter = tk.Label(win, text="", font=self.F(10), fg=MUTED, bg=NAVY)
         counter.pack(pady=(self.px(10), 4))
 
+        def needed():
+            n = dict(cells)
+            if state["numpad"]:
+                n.update(pads)
+            return n
+
         def update():
-            counter.configure(text="%d of %d keys pressed" % (len(seen),
-                                                              len(cells)))
+            need = needed()
+            got = len([k for k in seen if k in need])
+            counter.configure(text="%d of %d keys pressed%s" % (
+                got, len(need), "  (number pad included)"
+                if state["numpad"] else ""))
 
         def on_key(ev):
-            kid = KEYMAP.get(ev.keysym)
+            kid = NUMPAD_KEYMAP.get(ev.keysym) or KEYMAP.get(ev.keysym)
             if not kid and len(ev.keysym) == 1:
                 kid = ev.keysym.upper()
-            if kid in cells and kid not in seen:
+            if kid in pads and not state["numpad"]:
+                # this laptop has a number pad: now it must be tested too
+                state["numpad"] = True
+                np_title.configure(text="Number pad\n(test every key)",
+                                   fg=TEXT)
+                for c in pads.values():
+                    c.configure(bg=BORDER, fg=TEXT)
+            box = cells.get(kid) or pads.get(kid)
+            if box is not None and kid not in seen:
                 seen.add(kid)
-                cells[kid].configure(bg=OK, fg=NAVY)
+                box.configure(bg=OK, fg=NAVY)
                 update()
             return "break"
 
         def done():
             win.destroy()
-            if len(seen) >= len(cells):
+            need = needed()
+            cells_all = dict(cells)
+            cells.clear()
+            cells.update(need)
+            if all(k in seen for k in need):
                 self.finish_manual("Keyboard", "PASS",
-                                   ["All %d keys pressed" % len(cells)])
+                                   ["All %d keys pressed%s" % (
+                                       len(cells), " (with number pad)"
+                                       if state["numpad"] else "")])
             else:
                 # Not every key was pressed, so the keyboard is not proven.
                 missing = sorted(set(cells) - seen)
@@ -2651,7 +2811,7 @@ class App:
 
         def failed():
             win.destroy()
-            missing = sorted(set(cells) - seen)
+            missing = sorted(set(needed()) - seen)
             self.finish_manual("Keyboard", "FAIL",
                                ["Key not working. Not pressed: "
                                 + ", ".join(missing[:12])])
@@ -2717,6 +2877,238 @@ class App:
         canvas = tk.Canvas(win, bg=BG, highlightthickness=0)
         canvas.pack(fill="both", expand=True, padx=self.px(20))
         return win, canvas, info, btns
+
+    # ---------- webcam (live picture) ----------
+    def manual_webcam(self):
+        tk = self.tk
+        win = tk.Toplevel(self.root)
+        win.title("Webcam test")
+        win.configure(bg=NAVY)
+        sw, sh = win.winfo_screenwidth(), win.winfo_screenheight()
+        w, h = min(self.px(820), sw), min(self.px(680), sh)
+        win.geometry("%dx%d+%d+%d" % (w, h, (sw - w) // 2, (sh - h) // 2))
+        self.lbl(win, "Webcam test", 16, True).pack(pady=(self.px(12), 2))
+        self.lbl(win, "Look at the picture. Wave your hand in front of the "
+                      "camera, then choose below.", 10, fg=MUTED).pack()
+        pic = tk.Label(win, bg="black", text="Starting camera...",
+                       fg=MUTED, font=self.F(12),
+                       width=64, height=18)
+        pic.pack(pady=self.px(10))
+        info = self.lbl(win, "", 10, fg=MUTED)
+        info.pack()
+        bf = tk.Frame(win, bg=NAVY)
+        bf.pack(side="bottom", pady=self.px(12))
+        cam = {"proc": None, "frame": None, "img": None, "stop": False,
+               "frames": 0, "dev": ""}
+
+        def devices():
+            out = []
+            for p in sorted(glob.glob("/sys/class/video4linux/video*")):
+                idx = ""
+                try:
+                    with open(p + "/index") as fh:
+                        idx = fh.read().strip()
+                except Exception:
+                    pass
+                name = ""
+                try:
+                    with open(p + "/name") as fh:
+                        name = fh.read().strip()
+                except Exception:
+                    pass
+                dev = "/dev/" + os.path.basename(p)
+                if idx in ("", "0"):
+                    out.append((dev, name))
+            return out
+
+        def read_ppm(fh):
+            tokens = []
+            while len(tokens) < 4:
+                ln = fh.readline()
+                if not ln:
+                    return None
+                tokens += ln.split(b"#")[0].split()
+            fw, fh_ = int(tokens[1]), int(tokens[2])
+            size = fw * fh_ * 3
+            data = fh.read(size)
+            if len(data) < size:
+                return None
+            return b"P6\n%d %d\n255\n" % (fw, fh_) + data
+
+        def reader():
+            devs = devices()
+            if not devs:
+                cam["error"] = "No camera found on this laptop."
+                return
+            if not shutil.which("ffmpeg"):
+                cam["error"] = "ffmpeg is not installed on this USB."
+                return
+            for dev, name in devs:
+                if cam["stop"]:
+                    return
+                cam["dev"] = "%s  %s" % (dev, name)
+                try:
+                    proc = subprocess.Popen(
+                        ["ffmpeg", "-loglevel", "error", "-f", "v4l2",
+                         "-i", dev, "-vf", "scale=640:-2", "-r", "12",
+                         "-f", "image2pipe", "-vcodec", "ppm", "-"],
+                        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+                except Exception as ex:
+                    cam["error"] = "Camera could not start: %s" % ex
+                    continue
+                cam["proc"] = proc
+                while not cam["stop"]:
+                    fr = read_ppm(proc.stdout)
+                    if fr is None:
+                        break
+                    cam["frame"] = fr
+                    cam["frames"] += 1
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+                if cam["frames"]:
+                    return
+            if not cam["frames"]:
+                cam["error"] = "The camera gave no picture."
+
+        def show():
+            if cam["stop"]:
+                return
+            fr = cam.get("frame")
+            if fr is not None:
+                cam["frame"] = None
+                try:
+                    img = tk.PhotoImage(data=base64.b64encode(fr),
+                                        format="PPM")
+                    pic.configure(image=img, text="", width=img.width(),
+                                  height=img.height())
+                    cam["img"] = img
+                    info.configure(text="Camera: %s" % cam["dev"], fg=OK)
+                except Exception as ex:
+                    info.configure(text="Picture error: %s" % ex, fg=WARN)
+            elif cam.get("error"):
+                pic.configure(text=cam["error"], fg=WARN)
+            win.after(60, show)
+
+        def close(status, note):
+            cam["stop"] = True
+            p = cam.get("proc")
+            if p:
+                try:
+                    p.kill()
+                except Exception:
+                    pass
+            win.destroy()
+            note2 = note + (" (%s)" % cam["dev"].strip()
+                            if cam["dev"] else "")
+            self.finish_manual("Webcam", status, [note2])
+
+        self.btn(bf, "Camera works", lambda: close(
+            "PASS", "Live picture checked by technician")).pack(
+            side="left", padx=4)
+        self.btn(bf, "Picture bad / no picture", lambda: close(
+            "FAIL", "Camera picture bad or missing"), "danger",
+            width=250).pack(side="left", padx=4)
+        self.btn(bf, "No camera on this laptop", lambda: close(
+            NOT_FITTED, "No camera fitted"), "outline", width=250).pack(
+            side="left", padx=4)
+        win.protocol("WM_DELETE_WINDOW", lambda: close(
+            "WARN", "Webcam test closed without a result"))
+        threading.Thread(target=reader, daemon=True).start()
+        win.after(200, show)
+
+    # ---------- USB ports ----------
+    def manual_usb(self):
+        tk = self.tk
+        win = tk.Toplevel(self.root)
+        win.title("USB ports test")
+        win.configure(bg=NAVY)
+        sw, sh = win.winfo_screenwidth(), win.winfo_screenheight()
+        w, h = min(self.px(820), sw), min(self.px(600), sh)
+        win.geometry("%dx%d+%d+%d" % (w, h, (sw - w) // 2, (sh - h) // 2))
+        self.lbl(win, "USB ports test", 16, True).pack(pady=(self.px(12), 2))
+        self.lbl(win, "Plug a USB stick (or mouse) into EVERY USB port, one "
+                      "after another, USB-C too.\nEach port is listed below "
+                      "as soon as it works. The port with the boot USB "
+                      "already works.", 10, fg=MUTED,
+                 justify="center").pack()
+        count = self.lbl(win, "Ports found: 0", 14, True, fg=CYAN)
+        count.pack(pady=(self.px(12), self.px(6)))
+        lst = self.lbl(win, "Waiting for a device...", 11, fg=TEXT,
+                       justify="left", wraplength=w - 60)
+        lst.pack(fill="both", expand=True, padx=30)
+        bf = tk.Frame(win, bg=NAVY)
+        bf.pack(side="bottom", pady=self.px(12))
+
+        def rd(path):
+            try:
+                with open(path) as fh:
+                    return fh.read().strip()
+            except Exception:
+                return ""
+
+        def snapshot():
+            out = {}
+            for p in glob.glob("/sys/bus/usb/devices/*"):
+                n = os.path.basename(p)
+                if ":" in n or n.startswith("usb"):
+                    continue
+                out[n] = p
+            return out
+
+        base = set(snapshot())
+        st = {"ports": {}, "stop": False}
+
+        def speed_text(sp):
+            try:
+                v = int(float(sp))
+            except Exception:
+                return "USB"
+            if v >= 10000:
+                return "USB 3.2 (10 Gbps)"
+            if v >= 5000:
+                return "USB 3 (5 Gbps)"
+            if v >= 480:
+                return "USB 2"
+            return "USB 1"
+
+        def poll():
+            if st["stop"]:
+                return
+            for n, p in snapshot().items():
+                if n in base:
+                    continue
+                port = n.split(".")[0]
+                if port in st["ports"]:
+                    continue
+                prod = (rd(p + "/manufacturer") + " " +
+                        rd(p + "/product")).strip() or "USB device"
+                st["ports"][port] = "Port %s  -  %s  -  %s" % (
+                    port, speed_text(rd(p + "/speed")), prod)
+            if st["ports"]:
+                count.configure(text="Ports found: %d" % len(st["ports"]),
+                                fg=OK)
+                lst.configure(text="\n".join(
+                    "OK   " + v for v in st["ports"].values()))
+            win.after(600, poll)
+
+        def close(status, note):
+            st["stop"] = True
+            win.destroy()
+            ports = list(st["ports"].values())
+            notes = [note + " - %d port(s) seen working" % len(ports)]
+            notes += ports[:8]
+            self.finish_manual("USB", status, notes)
+
+        self.btn(bf, "All ports work", lambda: close(
+            "PASS", "All USB ports checked")).pack(side="left", padx=4)
+        self.btn(bf, "A port does not work", lambda: close(
+            "FAIL", "A USB port does not work"), "danger",
+            width=240).pack(side="left", padx=4)
+        win.protocol("WM_DELETE_WINDOW", lambda: close(
+            "WARN", "USB test closed without a result"))
+        win.after(300, poll)
 
     def manual_touchpad(self):
         win, c, info, btns = self._test_window(
@@ -3106,7 +3498,16 @@ class App:
             tests.append(self.s["manual"].get(comp) or {
                 "component": comp, "status": "WARN",
                 "notes": ["Not tested"], "details": {}})
-        return tests
+        out = []
+        for t in tests:
+            ov = self.s.get("override", {}).get(t.get("component"))
+            if ov:
+                t = dict(t)
+                t["notes"] = [ov["note"] + " (automatic result was %s)" %
+                              t.get("status", "?")] + list(t.get("notes") or [])
+                t["status"] = ov["status"]
+            out.append(t)
+        return out
 
     def build_report_data(self):
         chk = self.s.get("check") or {}
