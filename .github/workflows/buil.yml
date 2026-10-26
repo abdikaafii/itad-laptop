@@ -5,7 +5,7 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     timeout-minutes: 120
     steps:
       - name: Checkout code
@@ -24,15 +24,16 @@ jobs:
           apt-get update
           apt-get install -y live-build debootstrap xorriso squashfs-tools \
             syslinux syslinux-common isolinux mtools dosfstools \
-            grub-pc-bin grub-efi-amd64-bin ca-certificates cpio zstd gnupg \
+            grub-pc-bin grub-efi-amd64-bin grub-efi-ia32-bin \
+            ca-certificates cpio zstd gnupg \
             imagemagick fonts-dejavu-core
           cd /work/build
           bash build.sh 2>&1 | tee build.log
           EOF
 
-      - name: Build ISO (Debian 12 container)
+      - name: Build ISO (Debian 13 container)
         run: |
-          docker run --rm --privileged -v "$PWD":/work debian:bookworm bash /work/build-iso.sh
+          docker run --rm --privileged -v "$PWD":/work debian:trixie bash /work/build-iso.sh
 
       - name: Fix file owner and make checksum
         if: always()
