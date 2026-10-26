@@ -12,6 +12,9 @@ v1.5.0
     "Front left" / "Front right" so you can hear each speaker on its own.
     It uses the laptop's own speakers (not HDMI). Results: Both work /
     Left problem / Right problem / Crackling or no sound.
+  - New report design: dark-blue ITAD header with logo, coloured result
+    badge, QR code on page 1, coloured test results, BIOS and boot mode,
+    technician signature line.
   - Tamper-proof report: every report is digitally signed (Ed25519) and
     the PDF has a QR code with the job, serial, result and fingerprint.
     The signing key is kept on the ITAD_DATA stick (keys folder).
@@ -213,6 +216,24 @@ def load_json(path):
             return json.load(f)
     except Exception:
         return None
+
+
+def fmt_time(t):
+    return t.strftime("%Y-%m-%d %H:%M:%S") if t else ""
+
+
+def fmt_dur(a, b):
+    """'1 h 05 min' style duration between two times ('' if unknown)."""
+    if not a or not b:
+        return ""
+    sec = max(0, int((b - a).total_seconds()))
+    h, rem = divmod(sec, 3600)
+    m, s_ = divmod(rem, 60)
+    if h:
+        return "%d h %02d min" % (h, m)
+    if m:
+        return "%d min %02d s" % (m, s_)
+    return "%d s" % s_
 
 
 def valid_serial(s):
@@ -735,7 +756,10 @@ def render_txt(rep):
     add("=" * 60)
     for k, v in (("Job ID", rep["job_id"]), ("Asset ID", rep["asset_id"]),
                  ("Serial", rep["serial"]), ("Technician", rep["technician"]),
-                 ("Location", rep["location"]), ("Date/time", rep["time"]),
+                 ("Location", rep["location"]),
+                 ("Started", rep.get("started")),
+                 ("Finished", rep.get("finished")),
+                 ("Duration", rep.get("duration")),
                  ("Make / model", rep["make_model"]), ("CPU", rep["cpu"]),
                  ("RAM", rep["ram"]), ("Screen", rep.get("screen")),
                  ("Storage", rep["storage"])):
@@ -745,6 +769,10 @@ def render_txt(rep):
     add("%-14s: %s" % ("Absolute lock", rep["absolute"]))
     add("%-14s: %s" % ("Enrolment", rep["enrolment"]))
     add("%-14s: %s" % ("Wipe", rep["wipe_state"]))
+    if rep.get("wipe_started"):
+        add("   wipe started %s, finished %s (%s)" % (
+            rep["wipe_started"], rep.get("wipe_finished") or "-",
+            rep.get("wipe_duration") or "-"))
     for d in rep["wipe_devices"]:
         add("   %s  %s  method=%s  verified=%s" % (
             d.get("path"), d.get("model") or "?", d.get("achieved", "-"),
@@ -852,61 +880,271 @@ def qr_text(rep):
 
 
 def write_pdf(path, rep):
+    """Branded certificate: dark-blue ITAD header with logo, result badge,
+    QR code on page 1, coloured statuses, signature line."""
     from reportlab.lib import colors
     from reportlab.lib.pagesizes import A4
-    from reportlab.lib.styles import getSampleStyleSheet
-    from reportlab.platypus import (Paragraph, SimpleDocTemplate, Spacer,
-                                    Table, TableStyle)
-    st = getSampleStyleSheet()
-    col = {"PASS": "#1FA971", "FAIL": "#C62F2F"}.get(rep["overall"], "#B8860B")
-    doc = SimpleDocTemplate(path, pagesize=A4, title="ITAD Laptop report")
-    el = [Paragraph("ITAD Laptop - test and wipe report", st["Title"]),
-          Paragraph('<font color="%s"><b>RESULT: %s</b></font>'
-                    % (col, rep["overall"]), st["Heading2"])]
-    for r in rep["reasons"]:
-        el.append(Paragraph("- %s" % r, st["Normal"]))
-    el.append(Spacer(1, 10))
-    rows = [[k, Paragraph(str(v or "-"), st["Normal"])] for k, v in (
-        ("Job ID", rep["job_id"]), ("Asset ID", rep["asset_id"]),
-        ("Serial", rep["serial"]), ("Technician", rep["technician"]),
-        ("Location", rep["location"]), ("Date/time", rep["time"]),
-        ("Make / model", rep["make_model"]), ("CPU", rep["cpu"]),
-        ("RAM", rep["ram"]), ("Screen", rep.get("screen")),
-        ("Storage", rep["storage"]),
-        ("Absolute lock", rep["absolute"]), ("Enrolment", rep["enrolment"]),
-        ("Wipe", rep["wipe_state"]))]
+    from reportlab.lib.styles import ParagraphStyle
+    from reportlab.lib.units import mm
+    from reportlab.platypus import (KeepTogether, Paragraph,
+                                    SimpleDocTemplate, Spacer, Table,
+                                    TableStyle)
+    W, H = A4
+    NAVY_C = colors.HexColor("#050F22")
+    BLUE_C = colors.HexColor("#2E9BFF")
+    CYAN_C = colors.HexColor("#38BDF8")
+    INK = colors.HexColor("#0B1F40")
+    GREY = colors.HexColor("#5B6B84")
+    LINE = colors.HexColor("#D5DEEA")
+    SOFT = colors.HexColor("#F3F6FB")
+    STATUS_BG = {"PASS": "#DDF5EA", "FAIL": "#FBE1E1", "WARN": "#FFF3D1",
+                 NOT_FITTED: "#ECEFF4", "SKIP": "#ECEFF4"}
+    STATUS_FG = {"PASS": "#13774D", "FAIL": "#B3261E", "WARN": "#8A5A00",
+                 NOT_FITTED: "#5B6B84", "SKIP": "#5B6B84"}
+    RESULT_C = {"PASS": "#1FA971", "FAIL": "#C62F2F"}.get(rep["overall"],
+                                                          "#D9A21B")
+    integ = rep.get("integrity") or {}
+
+    def ps(name, size=9, bold=False, color=INK, lead=None, align=0):
+        return ParagraphStyle(name, fontName="Helvetica-Bold" if bold
+                              else "Helvetica", fontSize=size,
+                              leading=lead or size * 1.3, textColor=color,
+                              alignment=align)
+    s_txt = ps("t", 8.6)
+    s_small = ps("s", 7.2, color=GREY)
+    s_key = ps("k", 7.6, True, GREY)
+    s_val = ps("v", 9, True)
+    s_h = ps("h", 11, True, INK)
+
+    def esc(v):
+        return (str(v if v not in (None, "") else "-").replace("&", "&amp;")
+                .replace("<", "&lt;").replace(">", "&gt;"))
+
+    def header_footer(c, doc):
+        c.saveState()
+        # header band
+        c.setFillColor(NAVY_C)
+        c.rect(0, H - 30 * mm, W, 30 * mm, stroke=0, fill=1)
+        c.setFillColor(BLUE_C)
+        c.rect(0, H - 30 * mm, W, 1.2 * mm, stroke=0, fill=1)
+        c.setFont("Helvetica-Bold", 26)
+        c.setFillColor(colors.white)
+        c.drawString(16 * mm, H - 17 * mm, "IT")
+        c.setFillColor(BLUE_C)
+        c.drawString(16 * mm + c.stringWidth("IT", "Helvetica-Bold", 26),
+                     H - 17 * mm, "AD")
+        c.setFont("Helvetica", 7.5)
+        c.setFillColor(CYAN_C)
+        c.drawString(16.5 * mm, H - 23 * mm,
+                     "L A P T O P S E A L   -   S E C U R E  •  T E S T  •  "
+                     "C E R T I F Y")
+        c.setFillColor(colors.white)
+        c.setFont("Helvetica-Bold", 12)
+        c.drawRightString(W - 16 * mm, H - 15 * mm,
+                          "Certificate of Data Erasure")
+        c.setFont("Helvetica", 8.5)
+        c.setFillColor(colors.HexColor("#B9C8DE"))
+        c.drawRightString(W - 16 * mm, H - 20.5 * mm,
+                          "and Hardware Test Report")
+        c.drawRightString(W - 16 * mm, H - 25 * mm,
+                          "Job %s   •   Serial %s" % (rep["job_id"],
+                                                     rep["serial"]))
+        # footer
+        c.setStrokeColor(LINE)
+        c.line(16 * mm, 14 * mm, W - 16 * mm, 14 * mm)
+        c.setFont("Helvetica", 7)
+        c.setFillColor(GREY)
+        fp = integ.get("sha256", "")
+        c.drawString(16 * mm, 9.5 * mm, "ITAD LaptopSeal v%s%s" % (
+            VERSION, ("   •   Fingerprint %s..." % fp[:24]) if fp else ""))
+        c.drawRightString(W - 16 * mm, 9.5 * mm, "Page %d" % doc.page)
+        if rep.get("test_mode"):
+            c.setFont("Helvetica-Bold", 60)
+            c.setFillColor(colors.Color(0.8, 0.1, 0.1, alpha=0.12))
+            c.translate(W / 2, H / 2)
+            c.rotate(35)
+            c.drawCentredString(0, 0, "TEST MODE")
+        c.restoreState()
+
+    doc = SimpleDocTemplate(path, pagesize=A4, title="ITAD Laptop report",
+                            author="ITAD LaptopSeal",
+                            leftMargin=16 * mm, rightMargin=16 * mm,
+                            topMargin=36 * mm, bottomMargin=20 * mm)
+    FW = W - 32 * mm
+    el = []
+
+    # ---- result badge + reasons + QR ----
+    badge = Table([[Paragraph("RESULT", ps("rb", 8, True, colors.white,
+                                           align=1))],
+                   [Paragraph(esc(rep["overall"]),
+                              ps("rv", 22 if len(rep["overall"]) <= 6
+                                 else 14, True, colors.white, 26, 1))]],
+                  colWidths=[42 * mm], rowHeights=[6 * mm, 13 * mm])
+    badge.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor(RESULT_C)),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("TOPPADDING", (0, 0), (-1, -1), 1),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 1)]))
+    reasons = rep["reasons"] or ["All checks, the wipe and every component "
+                                 "test passed."]
+    rtxt = "<br/>".join("•  %s" % esc(r) for r in reasons[:6])
+    if len(reasons) > 6:
+        rtxt += "<br/>•  +%d more" % (len(reasons) - 6)
+    qr = ""
+    try:
+        from reportlab.graphics.barcode.qr import QrCodeWidget
+        from reportlab.graphics.shapes import Drawing
+        qw = QrCodeWidget(qr_text(rep))
+        x1, y1, x2, y2 = qw.getBounds()
+        sz = 30 * mm
+        qr = Drawing(sz, sz, transform=[sz / (x2 - x1), 0, 0,
+                                        sz / (y2 - y1), 0, 0])
+        qr.add(qw)
+    except Exception:
+        qr = Paragraph("QR unavailable", s_small)
+    sig_line = ("Digitally signed  •  key %s" % integ.get("key_id")
+                if integ.get("signed") else "Not signed")
+    top = Table([[badge, Paragraph(rtxt, s_txt),
+                  [qr, Paragraph(sig_line, ps("q", 6.5, color=GREY,
+                                              align=1))]]],
+                colWidths=[46 * mm, FW - 46 * mm - 34 * mm, 34 * mm])
+    top.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                             ("LEFTPADDING", (0, 0), (0, 0), 0),
+                             ("ALIGN", (2, 0), (2, 0), "CENTER")]))
+    el += [top, Spacer(1, 5 * mm)]
+
+    # ---- device + job details (two columns of key / value) ----
+    def kv_table(pairs, cols=2):
+        cells, row = [], []
+        for k, v in pairs:
+            row.append([Paragraph(k.upper(), s_key),
+                        Paragraph(esc(v), s_val)])
+            if len(row) == cols:
+                cells.append(row)
+                row = []
+        if row:
+            while len(row) < cols:
+                row.append("")
+            cells.append(row)
+        cw = FW / cols
+        t = Table(cells, colWidths=[cw] * cols)
+        t.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, -1), SOFT),
+            ("BOX", (0, 0), (-1, -1), 0.6, LINE),
+            ("INNERGRID", (0, 0), (-1, -1), 0.4, LINE),
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ("TOPPADDING", (0, 0), (-1, -1), 4),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+            ("LEFTPADDING", (0, 0), (-1, -1), 6)]))
+        return t
+    el += [Paragraph("Device and job", s_h), Spacer(1, 2 * mm),
+           kv_table([("Make / model", rep["make_model"]),
+                     ("Serial number", rep["serial"]),
+                     ("Job ID", rep["job_id"]),
+                     ("Asset ID", rep["asset_id"]),
+                     ("CPU", rep["cpu"]), ("RAM", rep["ram"]),
+                     ("Storage", rep["storage"]),
+                     ("Screen", rep.get("screen")),
+                     ("BIOS", rep.get("bios")),
+                     ("Boot mode", rep.get("boot_mode")),
+                     ("Technician", rep["technician"]),
+                     ("Location", rep["location"]),
+                     ("Started", rep.get("started")),
+                     ("Finished", rep.get("finished")),
+                     ("Total time", rep.get("duration"))]),
+           Spacer(1, 5 * mm)]
+
+    # ---- security + wipe ----
+    def chip(v):
+        v = str(v or "-")
+        good = v in ("CLEAR", "CLEAN", "WIPED")
+        bad = v in ("BLOCKED", "ACTIVE", "FAILED")
+        fg = "#13774D" if good else ("#B3261E" if bad else "#8A5A00")
+        return Paragraph('<font color="%s"><b>%s</b></font>' % (fg, esc(v)),
+                         ps("c", 10, True))
+    sec = Table([[Paragraph("ABSOLUTE LOCK", s_key),
+                  Paragraph("ENROLMENT (MDM)", s_key),
+                  Paragraph("DATA WIPE", s_key)],
+                 [chip(rep["absolute"]), chip(rep["enrolment"]),
+                  chip(rep["wipe_state"])]], colWidths=[FW / 3] * 3)
+    sec.setStyle(TableStyle([("BOX", (0, 0), (-1, -1), 0.6, LINE),
+                             ("INNERGRID", (0, 0), (-1, -1), 0.4, LINE),
+                             ("BACKGROUND", (0, 0), (-1, -1), SOFT),
+                             ("TOPPADDING", (0, 0), (-1, -1), 4),
+                             ("BOTTOMPADDING", (0, 0), (-1, -1), 5)]))
+    el += [Paragraph("Security checks and data wipe", s_h),
+           Spacer(1, 2 * mm), sec]
+    drows = []
     for d in rep.get("wipe_devices") or []:
+        ver = (d.get("verification") or {}).get("verified")
         ha = d.get("hidden_areas") or {}
-        txt = "%s %s - method %s, verified %s" % (
-            d.get("path"), d.get("model") or "", d.get("achieved", "-"),
-            "yes" if (d.get("verification") or {}).get("verified") else "no")
+        txt = "<b>%s</b>  %s   •   method <b>%s</b>   •   verified <b>%s</b>" % (
+            esc(d.get("path")), esc(d.get("model") or ""),
+            esc(d.get("achieved", "-")), "yes" if ver else "NO")
         if ha.get("checked"):
-            txt += "<br/>Hidden areas: HPA %s, DCO %s" % (ha.get("hpa"),
-                                                        ha.get("dco"))
-        rows.append(["Wiped drive", Paragraph(txt, st["Normal"])])
-    t = Table(rows, colWidths=[110, 380])
-    t.setStyle(TableStyle([("GRID", (0, 0), (-1, -1), 0.3, colors.grey),
-                           ("FONTSIZE", (0, 0), (-1, -1), 9),
-                           ("VALIGN", (0, 0), (-1, -1), "TOP")]))
-    el += [t, Spacer(1, 12), Paragraph("Components", st["Heading3"])]
-    rows = [["Component", "Status", "Notes"]]
-    for x in rep["tests"]:
-        rows.append([x.get("component"), x.get("status"),
-                     Paragraph("; ".join(x.get("notes") or []) or "-",
-                               st["Normal"])])
-    t2 = Table(rows, colWidths=[100, 50, 340])
-    t2.setStyle(TableStyle([("GRID", (0, 0), (-1, -1), 0.3, colors.grey),
-                            ("BACKGROUND", (0, 0), (-1, 0), colors.lightgrey),
-                            ("FONTSIZE", (0, 0), (-1, -1), 9)]))
-    el.append(t2)
-    el += [Spacer(1, 12), Paragraph("Observations", st["Heading3"])]
-    rows = [[k, Paragraph(str(v), st["Normal"])]
-            for k, v in obs_lines(rep.get("observations"))]
-    t3 = Table(rows, colWidths=[110, 380])
-    t3.setStyle(TableStyle([("GRID", (0, 0), (-1, -1), 0.3, colors.grey),
-                            ("FONTSIZE", (0, 0), (-1, -1), 9),
+            txt += "<br/>Hidden areas: HPA %s, DCO %s" % (
+                esc(ha.get("hpa")), esc(ha.get("dco")))
+        drows.append([Paragraph(txt, s_txt)])
+    if rep.get("wipe_started"):
+        drows.append([Paragraph("Wipe started %s   •   finished %s   •   "
+                                "took <b>%s</b>" % (
+                                    esc(rep["wipe_started"]),
+                                    esc(rep.get("wipe_finished")),
+                                    esc(rep.get("wipe_duration"))), s_txt)])
+    if rep.get("certificate"):
+        drows.append([Paragraph("Wipe certificate SHA-256: %s" %
+                                esc(rep["certificate"]), s_small)])
+    if drows:
+        dt = Table(drows, colWidths=[FW])
+        dt.setStyle(TableStyle([("BOX", (0, 0), (-1, -1), 0.6, LINE),
+                                ("TOPPADDING", (0, 0), (-1, -1), 3),
+                                ("BOTTOMPADDING", (0, 0), (-1, -1), 4)]))
+        el.append(dt)
+    el.append(Paragraph("Erasure follows NIST SP 800-88 (Purge where the "
+                        "drive supports it, otherwise Clear) and is checked "
+                        "by reading the drive back.", s_small))
+    el.append(Spacer(1, 5 * mm))
+
+    # ---- components ----
+    tests = rep["tests"]
+    fitted = [t for t in tests if t.get("status") != NOT_FITTED]
+    good = sum(1 for t in fitted if t.get("status") == "PASS")
+    rows = [[Paragraph("COMPONENT", s_key), Paragraph("RESULT", s_key),
+             Paragraph("DETAILS", s_key)]]
+    style = [("BOX", (0, 0), (-1, -1), 0.6, LINE),
+             ("LINEBELOW", (0, 0), (-1, -1), 0.4, LINE),
+             ("BACKGROUND", (0, 0), (-1, 0), SOFT),
+             ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+             ("ALIGN", (1, 0), (1, -1), "CENTER"),
+             ("TOPPADDING", (0, 0), (-1, -1), 3),
+             ("BOTTOMPADDING", (0, 0), (-1, -1), 4)]
+    for n, x in enumerate(tests, start=1):
+        stt = x.get("status") or "-"
+        label = "N/A" if stt == NOT_FITTED else stt
+        rows.append([Paragraph("<b>%s</b>" % esc(x.get("component")), s_txt),
+                     Paragraph('<font color="%s"><b>%s</b></font>' % (
+                         STATUS_FG.get(stt, "#5B6B84"), label),
+                         ps("st", 8.2, True, align=1)),
+                     Paragraph(esc("; ".join(x.get("notes") or []) or "-"),
+                               s_txt)])
+        style.append(("BACKGROUND", (1, n), (1, n),
+                      colors.HexColor(STATUS_BG.get(stt, "#ECEFF4"))))
+    ct = Table(rows, colWidths=[30 * mm, 18 * mm, FW - 48 * mm],
+               repeatRows=1)
+    ct.setStyle(TableStyle(style))
+    el += [Paragraph("Component tests  -  %d of %d passed" % (
+        good, len(fitted)), s_h), Spacer(1, 2 * mm), ct,
+        Spacer(1, 5 * mm)]
+
+    # ---- observations + photos ----
+    obs_rows = [[Paragraph(k.upper(), s_key), Paragraph(esc(v), s_txt)]
+                for k, v in obs_lines(rep.get("observations"))]
+    ot = Table(obs_rows, colWidths=[34 * mm, FW - 34 * mm])
+    ot.setStyle(TableStyle([("BOX", (0, 0), (-1, -1), 0.6, LINE),
+                            ("INNERGRID", (0, 0), (-1, -1), 0.4, LINE),
+                            ("BACKGROUND", (0, 0), (0, -1), SOFT),
                             ("VALIGN", (0, 0), (-1, -1), "TOP")]))
-    el.append(t3)
+    block = [Paragraph("Observations", s_h), Spacer(1, 2 * mm), ot]
     photos = (rep.get("observations") or {}).get("photo_files") or []
     if photos:
         try:
@@ -915,42 +1153,36 @@ def write_pdf(path, rep):
             cells = []
             for p in photos[:6]:
                 iw, ih = ImageReader(p).getSize()
-                w = 155.0
+                w = 55 * mm
                 cells.append(Image(p, width=w, height=w * ih / float(iw)))
-            grid = [cells[i:i + 3] for i in range(0, len(cells), 3)]
-            el += [Spacer(1, 8), Table(grid)]
+            block += [Spacer(1, 3 * mm),
+                      Table([cells[i:i + 3]
+                             for i in range(0, len(cells), 3)])]
         except Exception:
             pass
-    if rep.get("certificate"):
-        el += [Spacer(1, 8), Paragraph("Wipe certificate SHA-256: %s"
-                                       % rep["certificate"], st["Normal"])]
-    integ = rep.get("integrity") or {}
-    if integ:
-        from reportlab.platypus import KeepTogether
-        head = [Spacer(1, 12), Paragraph("Report integrity", st["Heading3"])]
-        txt = ("Fingerprint (SHA-256): %s<br/>" % integ.get("sha256", "-"))
-        if integ.get("signed"):
-            txt += ("Digitally signed (Ed25519), key ID %s.<br/>Signature: "
-                    "%s" % (integ.get("key_id"),
-                            integ.get("signature", "")[:64] + "..."))
-        else:
-            txt += "NOT signed (%s)." % integ.get("note", "no key")
-        para = Paragraph('<font size="7">%s</font>' % txt, st["Normal"])
-        try:
-            from reportlab.graphics.barcode.qr import QrCodeWidget
-            from reportlab.graphics.shapes import Drawing
-            qw = QrCodeWidget(qr_text(rep))
-            x1, y1, x2, y2 = qw.getBounds()
-            size = 95.0
-            d = Drawing(size, size, transform=[size / (x2 - x1), 0, 0,
-                                               size / (y2 - y1), 0, 0])
-            d.add(qw)
-            box = Table([[d, para]], colWidths=[105, 385])
-            box.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "MIDDLE")]))
-            el.append(KeepTogether(head + [box]))
-        except Exception:
-            el.append(KeepTogether(head + [para]))
-    doc.build(el)
+    el.append(KeepTogether(block))
+    el.append(Spacer(1, 6 * mm))
+
+    # ---- integrity + signature line ----
+    itxt = "Fingerprint (SHA-256): %s" % esc(integ.get("sha256", "-"))
+    if integ.get("signed"):
+        itxt += ("<br/>Digitally signed with Ed25519, key ID %s.<br/>"
+                 "Signature: %s" % (esc(integ.get("key_id")),
+                                    esc(integ.get("signature", ""))))
+    else:
+        itxt += "<br/>NOT signed (%s)." % esc(integ.get("note", "no key"))
+    itxt += ("<br/>Any change to this report breaks the fingerprint. "
+             "Check it with verify_report.py.")
+    sign = Table([[Paragraph("Technician: <b>%s</b>" % esc(rep["technician"]),
+                             s_txt),
+                   Paragraph("Signature: ________________________", s_txt),
+                   Paragraph("Date: %s" % esc(rep["time"][:10]), s_txt)]],
+                 colWidths=[FW * 0.33, FW * 0.42, FW * 0.25])
+    el.append(KeepTogether([
+        Paragraph("Report integrity", s_h), Spacer(1, 2 * mm),
+        Paragraph(itxt, ps("i", 6.8, color=GREY)), Spacer(1, 8 * mm),
+        sign]))
+    doc.build(el, onFirstPage=header_footer, onLaterPages=header_footer)
 
 
 def fallback_terminal(reason, dry_run=False):
@@ -2282,6 +2514,7 @@ class App:
         if not self.test_mode or not self.job_ready():
             return
         self.job_active = True
+        self.s.setdefault("started", now())
         self.s["check"] = None
         self.set_stage("check", "warn", "Test mode - not checked")
         self.test_mode_skip_wipe()
@@ -2329,6 +2562,7 @@ class App:
             return
         self.start_msg.configure(text="")
         self.job_active = True
+        self.s.setdefault("started", now())
         self.run_check()
 
     # ---------- checks ----------
@@ -2654,6 +2888,7 @@ class App:
         self.w_title.configure(text="Wiping... do not power off", fg=WARN)
         self.w_power.configure(state="disabled")
         self.set_stage("wipe", "run", "Wiping... 0%")
+        self.s["wipe_start"] = now()
         cmd = ([PY, WIPE] + self.common_args() +
                ["--json", self.p_wipe, "--check-report", self.p_check,
                 "--method", "auto", "--commit", "--yes-i-mean-it"])
@@ -2670,6 +2905,7 @@ class App:
 
     def wipe_done(self, rc):
         self.wiping = False
+        self.s["wipe_end"] = now()
         self.w_power.configure(state="normal")
         data = load_json(self.p_wipe) or {}
         self.s["wipe"] = data
@@ -3765,6 +4001,13 @@ class App:
         return {
             "tool": "laptop_window.py", "version": VERSION,
             "time": now().strftime("%Y-%m-%d %H:%M:%S") + " (Europe/Dublin)",
+            "started": fmt_time(self.s.get("started")),
+            "finished": now().strftime("%Y-%m-%d %H:%M:%S"),
+            "duration": fmt_dur(self.s.get("started"), now()),
+            "wipe_started": fmt_time(self.s.get("wipe_start")),
+            "wipe_finished": fmt_time(self.s.get("wipe_end")),
+            "wipe_duration": fmt_dur(self.s.get("wipe_start"),
+                                     self.s.get("wipe_end")),
             "job_id": self.job(), "asset_id": self.asset(),
             "serial": self.serial() or "UNKNOWN", "technician": self.tech(),
             "location": self.v_loc.get().strip(),
@@ -3776,6 +4019,9 @@ class App:
             "screen": screen_text(self.screen),
             "screen_details": self.screen or {},
             "storage": stor,
+            "bios": ("%s %s" % (i.get("bios_vendor", ""),
+                                i.get("bios_version", ""))).strip(),
+            "boot_mode": i.get("boot_mode", ""),
             "absolute": (chk.get("absolute_result", "?") if chk else
                          "NOT CHECKED (TEST MODE)"),
             "enrolment": ({"CLEAN": "CLEAN", "BLOCKED": "ACTIVE",
