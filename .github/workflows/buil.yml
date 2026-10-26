@@ -41,6 +41,21 @@ jobs:
           sudo chown -R "$(id -u):$(id -g)" build || true
           cd build && sha256sum itad-laptop.iso > itad-laptop.iso.sha256 || true
 
+      - name: Report key build results
+        if: always()
+        run: |
+          cd build
+          # Short notes shown on the run page (and readable through the
+          # GitHub API), so the build can be checked without the log.
+          size=$(stat -c %s itad-laptop.iso 2>/dev/null || echo 0)
+          parts=$(sfdisk -d itad-laptop.iso 2>/dev/null | grep -E '^label:|^itad' | tr '\n' ' ' | sed 's/itad-laptop.iso//g')
+          data=$(grep -E 'ITAD_DATA partition added|could not add the ITAD_DATA' build.log | head -n1)
+          echo "::notice title=ISO::size ${size} bytes | ${data:-no ITAD_DATA line} | partitions: ${parts}"
+          skipped=$(grep -m1 'ITAD extra packages SKIPPED' build.log | cut -c1-900)
+          echo "::notice title=Packages::${skipped:-no skipped-packages line}"
+          err=$(grep -E '^E: |ERROR' build.log | head -n3 | tr '\n' ' ' | cut -c1-900)
+          [ -n "$err" ] && echo "::warning title=Errors::${err}" || true
+
       - name: Upload ISO
         uses: actions/upload-artifact@v4
         with:
