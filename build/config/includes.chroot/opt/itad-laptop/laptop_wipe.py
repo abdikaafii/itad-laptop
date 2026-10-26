@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-laptop_wipe.py - ITAD data destruction (v1.0.4)
+laptop_wipe.py - ITAD data destruction (v1.0.5)
 
 DESTRUCTIVE. Wipes internal drives. Never touches USB / external drives
 or the drive the running OS is booted from.
@@ -8,6 +8,10 @@ or the drive the running OS is booted from.
 Step 3 of the ITAD pipeline. Runs AFTER laptop_check.py reports CLEAR
 and BEFORE laptop_test.py.
 
+v1.0.5: hidden areas: before wiping a SATA drive, a Host Protected Area
+  (HPA) is removed and a Device Configuration Overlay (DCO) is reset, so
+  the wipe reaches the whole drive (hidden areas can hold old data).
+  What was found and done is written in the report ("hidden_areas").
 v1.0.4: works on more laptop types:
   - eMMC storage (cheap laptops, Chromebooks, some tablets) is now wiped:
     secure erase / secure trim first (Purge), then normal discard.
@@ -97,7 +101,7 @@ try:
 except Exception:
     NOW = datetime.now()
 
-VERSION = "1.0.4"
+VERSION = "1.0.5"
 ALL_METHODS = ["auto", "clear", "random", "dod", "purge", "crypto", "discard"]
 
 BAD_SERIALS = {
@@ -903,6 +907,74 @@ def _ata_security_info(ident):
     return info
 
 
+def remove_hidden_areas(disk):
+    """SATA only. Remove an HPA and reset a DCO so the wipe covers the
+    whole drive. Returns a dict for the report."""
+    res = {"checked": False, "hpa": "not checked", "dco": "not checked",
+           "notes": []}
+    dev = disk["path"]
+    if _is_nvme(disk) or _is_emmc(disk) or not shutil.which("hdparm"):
+        res["hpa"] = res["dco"] = "not applicable"
+        return res
+    if disk.get("tran") not in ("sata", "ata", ""):
+        res["hpa"] = res["dco"] = "not applicable"
+        return res
+    res["checked"] = True
+    YES = "--yes-i-know-what-i-am-doing"
+    rc, out, err = run(["hdparm", "-N", dev], timeout=20)
+    m = re.search(r"max sectors\s*=\s*(\d+)/(\d+)", out)
+    native = None
+    if m:
+        cur, native = int(m.group(1)), int(m.group(2))
+        if cur < native:
+            rc2, o2, e2 = run(["hdparm", YES, "-Np%d" % native, dev],
+                              timeout=30)
+            rc3, o3, _ = run(["hdparm", "-N", dev], timeout=20)
+            m3 = re.search(r"max sectors\s*=\s*(\d+)/(\d+)", o3)
+            if m3 and int(m3.group(1)) == int(m3.group(2)):
+                res["hpa"] = "found and removed (%d hidden sectors)" % (
+                    native - cur)
+            else:
+                res["hpa"] = "found, could NOT be removed (%s)" % (
+                    (e2 or o2).strip()[:80] or "drive refused")
+        else:
+            res["hpa"] = "none"
+    else:
+        res["hpa"] = "unknown (%s)" % ((err or out).strip()[:60] or
+                                       "no answer")
+    rc, out, err = run(["hdparm", "--dco-identify", dev], timeout=20)
+    m = re.search(r"Real max sectors:\s*(\d+)", out)
+    if m:
+        real = int(m.group(1))
+        if native is None:
+            rcn, on, _ = run(["hdparm", "-N", dev], timeout=20)
+            mn = re.search(r"max sectors\s*=\s*\d+/(\d+)", on)
+            native = int(mn.group(1)) if mn else None
+        if native is not None and real > native:
+            rc2, o2, e2 = run(["hdparm", YES, "--dco-restore", dev],
+                              timeout=30)
+            if rc2 == 0:
+                res["dco"] = ("found and reset (%d hidden sectors) - a full "
+                              "power off may be needed" % (real - native))
+            else:
+                res["dco"] = "found, could NOT be reset (%s)" % (
+                    (e2 or o2).strip()[:80] or "drive refused")
+        else:
+            res["dco"] = "none"
+    else:
+        res["dco"] = "not supported by this drive"
+    # Tell Linux the drive is bigger now, so overwrite wipes reach the end.
+    if "removed" in res["hpa"] or "reset" in res["dco"]:
+        try:
+            with open("/sys/block/%s/device/rescan" %
+                      os.path.basename(dev), "w") as f:
+                f.write("1")
+            time.sleep(2)
+        except Exception:
+            pass
+    return res
+
+
 _UNFROZEN_TRIED = {"done": False}
 
 
@@ -1270,6 +1342,13 @@ def main():
                "tran": disk["tran"], "requested": args.method}
 
         achieved = "fail"
+        # Hidden areas first, so every method reaches the whole drive.
+        if args.commit:
+            ha = remove_hidden_areas(disk)
+            row["hidden_areas"] = ha
+            if ha.get("checked"):
+                print("    " + paint("Hidden areas: HPA %s, DCO %s" % (
+                    ha["hpa"], ha["dco"]), "dim"))
         if args.method in ("auto", "purge"):
             res = _wipe_purge(disk, progress_line)
             achieved = res["achieved"]

@@ -1,7 +1,21 @@
 #!/usr/bin/env python3
 """
-laptop_window.py - ITAD Laptop window (v1.4.0)
+laptop_window.py - ITAD Laptop window (v1.5.0)
 This is the GRAPHICAL USER INTERFACE (GUI).
+
+v1.5.0
+  - New automatic tests: Ethernet (cable link + speed) and Bluetooth
+    (scans for nearby devices, e.g. a phone with Bluetooth ON).
+  - Battery: discharge rate and estimated run time when the charger is
+    unplugged.
+  - New Speakers test window: LEFT, RIGHT and BOTH buttons. A voice says
+    "Front left" / "Front right" so you can hear each speaker on its own.
+    It uses the laptop's own speakers (not HDMI). Results: Both work /
+    Left problem / Right problem / Crackling or no sound.
+  - Tamper-proof report: every report is digitally signed (Ed25519) and
+    the PDF has a QR code with the job, serial, result and fingerprint.
+    The signing key is kept on the ITAD_DATA stick (keys folder).
+    Check a report with verify_report.py.
 
 v1.4.0
   - Keyboard test: number pad (Num Lock, 0-9, / * - + . Enter) shown on
@@ -65,7 +79,7 @@ try:
 except Exception:
     TZ = None
 
-VERSION = "1.4.0"
+VERSION = "1.5.0"
 TOOLS_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # --- THESE ARE THE FILES THIS GUI WILL RUN ---
@@ -114,10 +128,10 @@ STD_RAM_GB = [1, 2, 3, 4, 6, 8, 12, 16, 20, 24, 32, 36, 40, 48, 64, 96, 128,
               192, 256]
 LOCATIONS = ["Warehouse DPA3 Test Bay 1", "Warehouse DPA3 Test Bay 2",
              "Warehouse DPA3 Test Bay 3", "Warehouse DPA3 Test Bay 4", "Other"]
-AUTO_TESTS = "cpu,ram,drive,battery,wifi"
-COMPONENTS = ["CPU", "RAM", "Drive Health", "Battery", "Webcam", "Wi-Fi",
-              "USB", "Screen", "Keyboard", "Touchpad", "Touchscreen",
-              "Speakers", "Microphone"]
+AUTO_TESTS = "cpu,ram,drive,battery,wifi,ethernet,bluetooth"
+COMPONENTS = ["CPU", "RAM", "Drive Health", "Battery", "Wi-Fi", "Ethernet",
+              "Bluetooth", "Webcam", "USB", "Screen", "Keyboard", "Touchpad",
+              "Touchscreen", "Speakers", "Microphone"]
 # On-screen tests the technician does (in button order)
 MANUAL = ["Screen", "Keyboard", "Touchpad", "Touchscreen", "Speakers",
           "Microphone", "Webcam", "USB"]
@@ -126,7 +140,8 @@ MANUAL = ["Screen", "Keyboard", "Touchpad", "Touchscreen", "Speakers",
 NOT_FITTED = "N/A"
 BANNER_NAMES = {"CPU": "CPU", "RAM": "RAM", "DRIVE": "Drive Health",
                 "BATTERY": "Battery", "WEBCAM": "Webcam", "WIFI": "Wi-Fi",
-                "TOUCHPAD": "Touchpad", "USB": "USB"}
+                "TOUCHPAD": "Touchpad", "USB": "USB", "ETHERNET": "Ethernet",
+                "BLUETOOTH": "Bluetooth"}
 BAD_SERIALS = {
     "", "none", "default string", "to be filled by o.e.m.",
     "to be filled by o.e.m", "system serial number", "not specified",
@@ -353,6 +368,30 @@ def unmute_audio():
         for ctl in ("Capture", "Internal Mic", "Mic"):
             run_cmd(["amixer", "-q", "-c", c, "sset", ctl, "80%", "cap"],
                     timeout=5)
+
+
+def speaker_device():
+    """The laptop's own speakers, not HDMI / DisplayPort.
+    Returns (alsa_device, description) or None for the default."""
+    rc, out = 1, ""
+    try:
+        p = subprocess.run(["aplay", "-l"], capture_output=True, text=True,
+                           timeout=5)
+        rc, out = p.returncode, p.stdout
+    except Exception:
+        return None
+    if rc != 0:
+        return None
+    for ln in out.splitlines():
+        m = re.match(r"card (\d+): .*?\[(.*?)\], device (\d+): (.*?) \[",
+                     ln)
+        if not m:
+            continue
+        name = (m.group(2) + " " + m.group(4)).strip()
+        if re.search(r"hdmi|displayport|\bdp\b", name, re.I):
+            continue
+        return ("plughw:%s,%s" % (m.group(1), m.group(3)), name)
+    return None
 
 
 def find_touchscreen():
@@ -710,6 +749,10 @@ def render_txt(rep):
         add("   %s  %s  method=%s  verified=%s" % (
             d.get("path"), d.get("model") or "?", d.get("achieved", "-"),
             "yes" if (d.get("verification") or {}).get("verified") else "no"))
+        ha = d.get("hidden_areas") or {}
+        if ha.get("checked"):
+            add("   hidden areas: HPA %s, DCO %s" % (ha.get("hpa"),
+                                                   ha.get("dco")))
     if rep.get("certificate"):
         add("   certificate sha256: %s" % rep["certificate"])
     add("")
@@ -723,7 +766,89 @@ def render_txt(rep):
         add("%-14s: %s" % (k, v))
     add("")
     add("Tool: ITAD Laptop window v%s" % VERSION)
+    integ = rep.get("integrity") or {}
+    if integ:
+        add("")
+        add("INTEGRITY")
+        add("%-14s: %s" % ("SHA-256", integ.get("sha256", "-")))
+        if integ.get("signed"):
+            add("%-14s: Ed25519, key ID %s" % ("Signed", integ.get("key_id")))
+            add("%-14s: %s" % ("Signature", integ.get("signature")))
+        else:
+            add("%-14s: NOT signed (%s)" % ("Signed", integ.get("note", "")))
     return "\n".join(L) + "\n"
+
+
+SIGN_FIELDS = ("integrity",)
+
+
+def report_fingerprint(rep):
+    """SHA-256 of the report content (everything except the signature)."""
+    body = dict((k, v) for k, v in rep.items() if k not in SIGN_FIELDS)
+    data = json.dumps(body, sort_keys=True, separators=(",", ":"),
+                      default=str).encode("utf-8")
+    return hashlib.sha256(data).hexdigest()
+
+
+def sign_report(rep, out_dir, persistent):
+    """Add rep["integrity"]: fingerprint + Ed25519 signature.
+    The private key lives on the ITAD_DATA stick (keys/), never in the ISO.
+    Without the stick the report gets a fingerprint but no signature."""
+    fp = report_fingerprint(rep)
+    integ = {"algorithm": "SHA-256 + Ed25519", "sha256": fp,
+             "signature": "", "key_id": "", "signed": False}
+    try:
+        from cryptography.hazmat.primitives import serialization
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import (
+            Ed25519PrivateKey)
+    except Exception:
+        integ["note"] = "cryptography module missing - not signed"
+        rep["integrity"] = integ
+        return integ
+    if not persistent:
+        integ["note"] = "no ITAD_DATA stick - not signed"
+        rep["integrity"] = integ
+        return integ
+    kdir = os.path.join(out_dir, "keys")
+    kpriv = os.path.join(kdir, "itad_signing_key.pem")
+    kpub = os.path.join(kdir, "itad_signing_public.pem")
+    try:
+        os.makedirs(kdir, exist_ok=True)
+        if os.path.exists(kpriv):
+            with open(kpriv, "rb") as f:
+                key = serialization.load_pem_private_key(f.read(), None)
+        else:
+            key = Ed25519PrivateKey.generate()
+            with open(kpriv, "wb") as f:
+                f.write(key.private_bytes(
+                    serialization.Encoding.PEM,
+                    serialization.PrivateFormat.PKCS8,
+                    serialization.NoEncryption()))
+            os.chmod(kpriv, 0o600)
+        pub = key.public_key().public_bytes(
+            serialization.Encoding.Raw, serialization.PublicFormat.Raw)
+        if not os.path.exists(kpub):
+            with open(kpub, "wb") as f:
+                f.write(key.public_key().public_bytes(
+                    serialization.Encoding.PEM,
+                    serialization.PublicFormat.SubjectPublicKeyInfo))
+        integ["signature"] = key.sign(fp.encode("ascii")).hex()
+        integ["key_id"] = hashlib.sha256(pub).hexdigest()[:16]
+        integ["public_key"] = pub.hex()
+        integ["signed"] = True
+    except Exception as ex:
+        integ["note"] = "signing failed: %s" % str(ex)[:80]
+    rep["integrity"] = integ
+    return integ
+
+
+def qr_text(rep):
+    integ = rep.get("integrity") or {}
+    return "ITAD|%s|%s|%s|%s|%s|%s|%s" % (
+        rep.get("job_id", ""), rep.get("asset_id", ""),
+        rep.get("serial", ""), rep.get("overall", ""),
+        rep.get("time", "")[:16], integ.get("sha256", "")[:32],
+        integ.get("key_id", "") or "unsigned")
 
 
 def write_pdf(path, rep):
@@ -750,6 +875,15 @@ def write_pdf(path, rep):
         ("Storage", rep["storage"]),
         ("Absolute lock", rep["absolute"]), ("Enrolment", rep["enrolment"]),
         ("Wipe", rep["wipe_state"]))]
+    for d in rep.get("wipe_devices") or []:
+        ha = d.get("hidden_areas") or {}
+        txt = "%s %s - method %s, verified %s" % (
+            d.get("path"), d.get("model") or "", d.get("achieved", "-"),
+            "yes" if (d.get("verification") or {}).get("verified") else "no")
+        if ha.get("checked"):
+            txt += "<br/>Hidden areas: HPA %s, DCO %s" % (ha.get("hpa"),
+                                                        ha.get("dco"))
+        rows.append(["Wiped drive", Paragraph(txt, st["Normal"])])
     t = Table(rows, colWidths=[110, 380])
     t.setStyle(TableStyle([("GRID", (0, 0), (-1, -1), 0.3, colors.grey),
                            ("FONTSIZE", (0, 0), (-1, -1), 9),
@@ -790,6 +924,32 @@ def write_pdf(path, rep):
     if rep.get("certificate"):
         el += [Spacer(1, 8), Paragraph("Wipe certificate SHA-256: %s"
                                        % rep["certificate"], st["Normal"])]
+    integ = rep.get("integrity") or {}
+    if integ:
+        from reportlab.platypus import KeepTogether
+        head = [Spacer(1, 12), Paragraph("Report integrity", st["Heading3"])]
+        txt = ("Fingerprint (SHA-256): %s<br/>" % integ.get("sha256", "-"))
+        if integ.get("signed"):
+            txt += ("Digitally signed (Ed25519), key ID %s.<br/>Signature: "
+                    "%s" % (integ.get("key_id"),
+                            integ.get("signature", "")[:64] + "..."))
+        else:
+            txt += "NOT signed (%s)." % integ.get("note", "no key")
+        para = Paragraph('<font size="7">%s</font>' % txt, st["Normal"])
+        try:
+            from reportlab.graphics.barcode.qr import QrCodeWidget
+            from reportlab.graphics.shapes import Drawing
+            qw = QrCodeWidget(qr_text(rep))
+            x1, y1, x2, y2 = qw.getBounds()
+            size = 95.0
+            d = Drawing(size, size, transform=[size / (x2 - x1), 0, 0,
+                                               size / (y2 - y1), 0, 0])
+            d.add(qw)
+            box = Table([[d, para]], colWidths=[105, 385])
+            box.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "MIDDLE")]))
+            el.append(KeepTogether(head + [box]))
+        except Exception:
+            el.append(KeepTogether(head + [para]))
     doc.build(el)
 
 
@@ -2585,7 +2745,10 @@ class App:
         if r.get("component") == "Battery":
             for b in (r.get("details") or {}).get("batteries") or []:
                 if b.get("health_pct") is not None:
-                    return "%.0f%% health" % b["health_pct"]
+                    txt = "%.0f%% health" % b["health_pct"]
+                    if b.get("runtime_h"):
+                        txt += ", ~%.1f h" % b["runtime_h"]
+                    return txt
             if r.get("status") == "SKIP":
                 return "no battery"
         return ""
@@ -2825,29 +2988,101 @@ class App:
         win.focus_force()
 
     def manual_speakers(self):
-        def work():
-            if not shutil.which("speaker-test"):
-                self.q.put(lambda: self.finish_manual(
-                    "Speakers", "WARN", ["speaker-test not installed"]))
-                return
-            unmute_audio()
-            try:
-                subprocess.call(["speaker-test", "-t", "sine", "-f", "440",
-                                 "-l", "1", "-c", "2"], timeout=15,
-                                stdout=subprocess.DEVNULL,
-                                stderr=subprocess.DEVNULL)
-            except Exception:
-                pass
-            self.q.put(ask)
+        tk = self.tk
+        win = tk.Toplevel(self.root)
+        win.title("Speakers test")
+        win.configure(bg=NAVY)
+        sw, sh = win.winfo_screenwidth(), win.winfo_screenheight()
+        w, h = min(self.px(760), sw), min(self.px(470), sh)
+        win.geometry("%dx%d+%d+%d" % (w, h, (sw - w) // 2, (sh - h) // 2))
+        self.lbl(win, "Speakers test", 16, True).pack(pady=(self.px(12), 2))
+        self.lbl(win, "Press LEFT, then RIGHT. A voice says \"Front left\" "
+                      "or \"Front right\".\nListen: is it clear, from the "
+                      "right side, with no crackling?", 10, fg=MUTED,
+                 justify="center").pack()
+        dev = speaker_device()
+        info = self.lbl(win, "Output: %s" % (dev[1] if dev else
+                                            "default sound card"),
+                        10, fg=MUTED)
+        info.pack(pady=(self.px(6), 0))
+        now_l = self.lbl(win, "", 14, True, fg=CYAN)
+        now_l.pack(pady=self.px(10))
+        st = {"busy": False, "played": set(), "proc": None}
+        unmute_audio()
 
-        def ask():
-            if self.mb.askyesno("Speakers", "Did you hear a clear tone from "
-                                "the speakers?"):
-                self.finish_manual("Speakers", "PASS", ["Tone heard"])
-            else:
-                self.finish_manual("Speakers", "FAIL", ["No sound heard"])
+        def play(which):
+            if st["busy"]:
+                return
+            if not shutil.which("speaker-test"):
+                now_l.configure(text="speaker-test is not installed",
+                                fg=WARN)
+                return
+            st["busy"] = True
+            now_l.configure(text={"1": "Playing LEFT...",
+                                  "2": "Playing RIGHT...",
+                                  "both": "Playing BOTH..."}[which], fg=CYAN)
+
+            def work():
+                cmd = ["speaker-test", "-c", "2", "-l", "1"]
+                if dev:
+                    cmd += ["-D", dev[0]]
+                if which == "both":
+                    cmd += ["-t", "sine", "-f", "440"]
+                else:
+                    cmd += ["-t", "wav", "-s", which]
+                try:
+                    p = subprocess.Popen(cmd, stdout=subprocess.DEVNULL,
+                                         stderr=subprocess.DEVNULL)
+                    st["proc"] = p
+                    p.wait(timeout=20)
+                except Exception:
+                    pass
+                st["played"].add(which)
+                st["busy"] = False
+                self.q.put(lambda: now_l.configure(
+                    text="Done - did it sound right?", fg=TEXT))
+            threading.Thread(target=work, daemon=True).start()
+
+        pf = tk.Frame(win, bg=NAVY)
+        pf.pack(pady=self.px(6))
+        self.btn(pf, "LEFT", lambda: play("1"), "outline",
+                 width=150).pack(side="left", padx=6)
+        self.btn(pf, "RIGHT", lambda: play("2"), "outline",
+                 width=150).pack(side="left", padx=6)
+        self.btn(pf, "BOTH (tone)", lambda: play("both"), "outline",
+                 width=170).pack(side="left", padx=6)
+        bf = tk.Frame(win, bg=NAVY)
+        bf.pack(side="bottom", pady=self.px(14))
+
+        def close(status, note):
+            p = st.get("proc")
+            if p:
+                try:
+                    p.kill()
+                except Exception:
+                    pass
+            win.destroy()
+            played = sorted({"1": "left", "2": "right",
+                             "both": "both"}[x] for x in st["played"])
+            self.finish_manual("Speakers", status, [
+                note + (" (played: %s)" % ", ".join(played)
+                        if played else " (nothing played)")])
+
+        self.btn(bf, "Both work", lambda: close(
+            "PASS", "Left and right speakers clear")).pack(side="left",
+                                                           padx=4)
+        self.btn(bf, "Left problem", lambda: close(
+            "FAIL", "Left speaker problem"), "danger").pack(side="left",
+                                                            padx=4)
+        self.btn(bf, "Right problem", lambda: close(
+            "FAIL", "Right speaker problem"), "danger").pack(side="left",
+                                                             padx=4)
+        self.btn(bf, "Crackling / no sound", lambda: close(
+            "FAIL", "Crackling or no sound"), "danger", width=230).pack(
+            side="left", padx=4)
+        win.protocol("WM_DELETE_WINDOW", lambda: close(
+            "WARN", "Speakers test closed without a result"))
         self.set_row("Speakers", "RUN")
-        threading.Thread(target=work, daemon=True).start()
 
     def _test_window(self, title, lines):
         """Full-screen test window with a title and help text at the top
@@ -3606,7 +3841,9 @@ class App:
         if not saved:
             msg = "Report NOT saved"
         elif self.persistent:
-            msg = "Report saved (%s)" % kinds
+            msg = "Report saved (%s)%s" % (
+                kinds, " - digitally signed" if (rep.get("integrity") or {})
+                .get("signed") else " - NOT signed")
         else:
             msg = ("Report saved to memory only - copy it before "
                    "powering off (no ITAD_DATA stick)")
@@ -3637,6 +3874,8 @@ class App:
             except Exception:
                 pass
         obs["photo_files"] = copied
+        # sign last: the fingerprint covers everything in the report
+        sign_report(rep, self.out_dir, self.persistent)
         saved = []
         for ext, fn in (("txt", lambda p: open(p, "w").write(render_txt(rep))),
                         ("json", lambda p: json.dump(rep, open(p, "w"),

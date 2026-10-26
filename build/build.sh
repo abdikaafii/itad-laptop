@@ -54,6 +54,7 @@ printf '%s\n' plymouth plymouth-themes xorg xinit openbox xterm python3 \
   python3-tk python3-reportlab python3-pil sudo util-linux x11-xserver-utils \
   ntfs-3g alsa-utils network-manager smartmontools dmidecode hdparm \
   nvme-cli pciutils usbutils lshw iw rfkill parted fonts-dejavu-core zstd \
+  bluez python3-cryptography ffmpeg v4l-utils \
   > "$CFG/package-lists/itad.list.chroot"
 
 # NICE-TO-HAVE packages: installed one by one by a hook (step 4).
@@ -319,7 +320,7 @@ EOF
 cat > "$HOOKS/0150-itad-fast-boot.hook.chroot" <<'EOF'
 #!/bin/sh
 for u in NetworkManager-wait-online.service systemd-networkd-wait-online.service \
-         ModemManager.service bluetooth.service cups.service cups-browsed.service \
+         ModemManager.service cups.service cups-browsed.service \
          avahi-daemon.service avahi-daemon.socket apt-daily.timer \
          apt-daily-upgrade.timer man-db.timer e2scrub_all.timer \
          e2scrub_reap.service fstrim.timer anacron.timer anacron.service \

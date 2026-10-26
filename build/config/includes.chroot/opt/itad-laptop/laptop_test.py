@@ -1,9 +1,18 @@
 #!/usr/bin/env python3
 """
-laptop_test.py - ITAD component test (v1.1.4)  READ-MOSTLY
+laptop_test.py - ITAD component test (v1.2.0)  READ-MOSTLY
 
 Step 2 of the ITAD pipeline. Runs AFTER laptop_check.py and the wipe.
 
+v1.2.0: new tests:
+  - ethernet  - finds the wired network port, shows if a cable is plugged
+                in and the link speed (N/A if the laptop has no port)
+  - bluetooth - finds the Bluetooth adapter and scans for nearby devices
+                (a phone with Bluetooth on). PASS when a device is seen.
+  - battery   - discharge test: when the charger is unplugged it measures
+                how fast the battery drains (watts) and the estimated
+                run time.
+  A part the laptop does not have is reported as "N/A" (not fitted).
 v1.1.4: battery health is ALWAYS written in the result notes (for
         example "Health 92.3% - cycles 120 - charge 85% (Charging)"), not
         only when it is low, so the window and the report can show it.
@@ -70,14 +79,16 @@ try:
 except Exception:
     NOW = datetime.now()
 
-VERSION = "1.1.4"
+VERSION = "1.2.0"
 ALL_TESTS = ["cpu", "ram", "drive", "battery", "screen", "keyboard",
-             "touchpad", "webcam", "speakers", "wifi", "usb"]
+             "touchpad", "webcam", "speakers", "wifi", "usb", "ethernet",
+             "bluetooth"]
 # The component name each test puts in its result (used if a test crashes,
 # so the report still shows the right name).
 TEST_NAMES = {"cpu": "CPU", "ram": "RAM", "drive": "Drive Health",
               "battery": "Battery", "screen": "Screen",
               "keyboard": "Keyboard", "touchpad": "Touchpad",
+              "ethernet": "Ethernet", "bluetooth": "Bluetooth",
               "webcam": "Webcam", "speakers": "Speakers", "wifi": "Wi-Fi",
               "usb": "USB"}
 
@@ -183,7 +194,7 @@ _STATE = {
     "ACTIVE": ("bad", "red"),
     "WARN": ("warn", "yellow"), "PAST": ("warn", "yellow"),
     "CANNOT CHECK": ("warn", "yellow"), "UNKNOWN": ("warn", "yellow"),
-    "SKIP": ("skip", None),
+    "SKIP": ("skip", None), "N/A": ("skip", None),
 }
 
 
@@ -812,6 +823,34 @@ def test_battery():
             say("%s: health data unavailable" % bp, ("yellow",))
             if b.get("capacity"):
                 r["notes"].append("Health unknown  -  charge %s%%" % b["capacity"])
+        # Discharge test: only possible while running on battery.
+        try:
+            st_now = (b.get("status") or "").lower()
+            pw = read_file(bp + "/power_now")
+            en = read_file(bp + "/energy_now")
+            if not pw:
+                cur = read_file(bp + "/current_now")
+                volt = read_file(bp + "/voltage_now")
+                ch = read_file(bp + "/charge_now")
+                if cur and volt:
+                    pw = str(int(cur) * int(volt) // 1000000)
+                if ch and volt:
+                    en = str(int(ch) * int(volt) // 1000000)
+            if st_now == "discharging" and pw and int(pw) > 0:
+                watts = int(pw) / 1e6
+                b["discharge_w"] = round(watts, 1)
+                txt = "Discharge %.1f W" % watts
+                if en:
+                    hours = int(en) / float(pw)
+                    b["runtime_h"] = round(hours, 1)
+                    txt += "  -  about %.1f h left at this load" % hours
+                r["notes"].append(txt)
+                say("       " + txt, ("dim",))
+            elif st_now in ("charging", "full", "not charging"):
+                r["notes"].append("Discharge not measured: unplug the "
+                                  "charger to measure it")
+        except Exception:
+            pass
         out.append(b)
     r["details"]["batteries"] = out
 
@@ -1358,6 +1397,122 @@ def test_usb(interactive):
 
 
 # =============================================================================
+# Ethernet (wired network port)
+# =============================================================================
+def test_ethernet():
+    _banner("ethernet")
+    r = {"component": "Ethernet", "status": "N/A",
+         "details": {}, "notes": []}
+    ports = []
+    for p in sorted(glob.glob("/sys/class/net/*")):
+        n = os.path.basename(p)
+        if n == "lo" or os.path.isdir(p + "/wireless") \
+                or os.path.isdir(p + "/phy80211"):
+            continue
+        if not os.path.exists(p + "/device"):
+            continue            # virtual interface, not a real port
+        if read_file(p + "/type") != "1":
+            continue
+        dev = os.path.realpath(p + "/device")
+        if "/usb" in dev:
+            continue            # USB network adapter, not the laptop's port
+        ports.append(n)
+    if not ports:
+        r["notes"].append("No wired network port on this laptop")
+        _done(r, "not fitted")
+        return r
+    r["details"]["ports"] = ports
+    best = None
+    for n in ports:
+        run(["ip", "link", "set", n, "up"], timeout=5)
+    # a cable needs a few seconds to show a link
+    for _ in range(8):
+        for n in ports:
+            if read_file("/sys/class/net/%s/carrier" % n) == "1":
+                best = n
+                break
+        if best:
+            break
+        time.sleep(1)
+    if best:
+        speed = read_file("/sys/class/net/%s/speed" % best)
+        r["status"] = "PASS"
+        r["details"]["link_port"] = best
+        r["details"]["speed_mbps"] = speed
+        txt = "Cable connected on %s%s" % (
+            best, (" at %s Mb/s" % speed) if speed and speed != "-1" else "")
+        r["notes"].append(txt)
+        line("Link", txt, ("green",))
+    else:
+        r["status"] = "WARN"
+        r["notes"].append("Port %s found but no cable link - plug in a "
+                          "network cable and run the test again" %
+                          ", ".join(ports))
+        line("Link", "no cable", ("yellow",))
+    _done(r)
+    return r
+
+
+# =============================================================================
+# Bluetooth
+# =============================================================================
+def test_bluetooth():
+    _banner("bluetooth")
+    r = {"component": "Bluetooth", "status": "WARN",
+         "details": {}, "notes": []}
+    if shutil.which("rfkill"):
+        run(["rfkill", "unblock", "bluetooth"], timeout=5)
+        time.sleep(1)
+    hcis = sorted(os.path.basename(p)
+                  for p in glob.glob("/sys/class/bluetooth/hci*"))
+    if not hcis:
+        rc, out, _ = run(["rfkill", "list", "bluetooth"]) \
+            if shutil.which("rfkill") else (1, "", "")
+        if rc == 0 and out.strip():
+            r["notes"].append("Bluetooth is switched off or blocked "
+                              "(check the BIOS / wireless switch)")
+        else:
+            r["status"] = "N/A"
+            r["notes"].append("No Bluetooth adapter found (not fitted, or "
+                              "turned off in the BIOS)")
+        _done(r, r["notes"][-1])
+        return r
+    r["details"]["adapters"] = hcis
+    line("Adapter", ", ".join(hcis))
+    if not shutil.which("bluetoothctl"):
+        r["notes"].append("Adapter found (%s); bluetoothctl not installed, "
+                          "no scan" % hcis[0])
+        _done(r)
+        return r
+    # start the Bluetooth service if it is not running
+    if shutil.which("systemctl"):
+        run(["systemctl", "start", "bluetooth"], timeout=15)
+        time.sleep(2)
+    run(["bluetoothctl", "power", "on"], timeout=10)
+    say("Scanning for nearby Bluetooth devices (10 s)... "
+        "keep a phone with Bluetooth ON near the laptop.")
+    run(["bluetoothctl", "--timeout", "10", "scan", "on"], timeout=25)
+    rc, out, _ = run(["bluetoothctl", "devices"], timeout=10)
+    found = re.findall(r"^Device\s+([0-9A-F:]{17})\s*(.*)$", out, re.M | re.I)
+    r["details"]["devices_seen"] = len(found)
+    r["details"]["devices_sample"] = [n or m for m, n in found[:5]]
+    if found:
+        r["status"] = "PASS"
+        names = [n for m, n in found if n and not re.match(
+            r"^([0-9A-F]{2}-){5}[0-9A-F]{2}$", n, re.I)]
+        r["notes"].append("%d device(s) seen%s" % (
+            len(found), (": " + ", ".join(names[:3])) if names else ""))
+        line("Scan", r["notes"][-1], ("green",))
+    else:
+        r["notes"].append("Adapter %s works but no device was seen - put a "
+                          "phone with Bluetooth ON nearby and test again"
+                          % hcis[0])
+        line("Scan", "nothing seen", ("yellow",))
+    _done(r)
+    return r
+
+
+# =============================================================================
 # Summary
 # =============================================================================
 def summary_table(results, overall):
@@ -1468,6 +1623,8 @@ def main():
         "speakers": lambda: test_speakers(interactive),
         "wifi":     test_wifi,
         "usb":      lambda: test_usb(interactive),
+        "ethernet": test_ethernet,
+        "bluetooth": test_bluetooth,
     }
     _POS[0] = 0
     _POS[1] = len(selected)
