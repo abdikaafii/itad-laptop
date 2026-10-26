@@ -1,7 +1,16 @@
 #!/usr/bin/env python3
 """
-laptop_window.py - ITAD Laptop window (v1.7.2)
+laptop_window.py - ITAD Laptop window (v1.8.0)
 This is the GRAPHICAL USER INTERFACE (GUI).
+
+v1.8.0
+  - New keyboard test: real laptop keyboard drawing (UK/Ireland by
+    default, US switch), F-keys row, tall Enter, the backslash and # ~
+    keys, inverted-T arrows, number pad (counted only once used).
+    Keycaps go green when pressed and blue while held. Progress bar, last
+    key, list of keys not pressed yet, Start again. Keys are read by
+    their physical position, so the Linux keyboard language does not
+    matter.
 
 v1.7.2
   - Sign in: technician NAME is a drop-down list of the names in
@@ -146,7 +155,7 @@ try:
 except Exception:
     TZ = None
 
-VERSION = "1.7.2"
+VERSION = "1.8.0"
 TOOLS_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # --- THESE ARE THE FILES THIS GUI WILL RUN ---
@@ -251,6 +260,75 @@ NUMPAD_KEYMAP = {
     "KP_9": "KP_9", "KP_Prior": "KP_9", "KP_Page_Up": "KP_9",
     "KP_Decimal": "KP_.", "KP_Delete": "KP_.", "KP_Separator": "KP_.",
 }
+# Physical laptop keyboards for the keyboard test, by X keycode (works
+# whatever keyboard language Linux uses). (label, shift label, keycode,
+# width in key units). Keycode 0 = cannot be detected (Fn).
+KB_FROW = [("Esc", "", 9, 1)] + [
+    ("F%d" % i, "", kc, 1) for i, kc in zip(
+        range(1, 13), [67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 95, 96])] + [
+    ("Del", "", 119, 1.5)]
+KB_UK = [
+    [("`", "¬", 49, 1), ("1", "!", 10, 1), ("2", "\"", 11, 1),
+     ("3", "£", 12, 1), ("4", "$", 13, 1), ("5", "%", 14, 1),
+     ("6", "^", 15, 1), ("7", "&", 16, 1), ("8", "*", 17, 1),
+     ("9", "(", 18, 1), ("0", ")", 19, 1), ("-", "_", 20, 1),
+     ("=", "+", 21, 1), ("Backspace", "", 22, 2)],
+    [("Tab", "", 23, 1.5)] + [(c, "", kc, 1) for c, kc in
+                               zip("QWERTYUIOP", range(24, 34))] +
+    [("[", "{", 34, 1), ("]", "}", 35, 1), ("ENTER_TOP", "", 36, 1.5)],
+    [("Caps", "", 66, 1.75)] + [(c, "", kc, 1) for c, kc in
+                                 zip("ASDFGHJKL", range(38, 47))] +
+    [(";", ":", 47, 1), ("'", "@", 48, 1), ("#", "~", 51, 1),
+     ("ENTER_LOW", "", 36, 1.25)],
+    [("Shift", "", 50, 1.25), ("\\", "|", 94, 1)] +
+    [(c, "", kc, 1) for c, kc in zip("ZXCVBNM", range(52, 59))] +
+    [(",", "<", 59, 1), (".", ">", 60, 1), ("/", "?", 61, 1),
+     ("Shift", "", 62, 2.75)],
+    [("Ctrl", "", 37, 1.25), ("Fn", "", 0, 1), ("Win", "", 133, 1.25),
+     ("Alt", "", 64, 1.25), ("", "", 65, 4.75), ("Alt Gr", "", 108, 1.25),
+     ("Ctrl", "", 105, 1.25), ("ARROWS", "", 0, 3)],
+]
+KB_US = [
+    [("`", "~", 49, 1), ("1", "!", 10, 1), ("2", "@", 11, 1),
+     ("3", "#", 12, 1), ("4", "$", 13, 1), ("5", "%", 14, 1),
+     ("6", "^", 15, 1), ("7", "&", 16, 1), ("8", "*", 17, 1),
+     ("9", "(", 18, 1), ("0", ")", 19, 1), ("-", "_", 20, 1),
+     ("=", "+", 21, 1), ("Backspace", "", 22, 2)],
+    [("Tab", "", 23, 1.5)] + [(c, "", kc, 1) for c, kc in
+                               zip("QWERTYUIOP", range(24, 34))] +
+    [("[", "{", 34, 1), ("]", "}", 35, 1), ("\\", "|", 51, 1.5)],
+    [("Caps", "", 66, 1.75)] + [(c, "", kc, 1) for c, kc in
+                                 zip("ASDFGHJKL", range(38, 47))] +
+    [(";", ":", 47, 1), ("'", "\"", 48, 1), ("Enter", "", 36, 2.25)],
+    [("Shift", "", 50, 2.25)] + [(c, "", kc, 1) for c, kc in
+                                  zip("ZXCVBNM", range(52, 59))] +
+    [(",", "<", 59, 1), (".", ">", 60, 1), ("/", "?", 61, 1),
+     ("Shift", "", 62, 2.75)],
+    [("Ctrl", "", 37, 1.25), ("Fn", "", 0, 1), ("Win", "", 133, 1.25),
+     ("Alt", "", 64, 1.25), ("", "", 65, 4.75), ("Alt", "", 108, 1.25),
+     ("Ctrl", "", 105, 1.25), ("ARROWS", "", 0, 3)],
+]
+KB_ARROWS = {"up": ("▲", 111), "left": ("◀", 113),
+             "down": ("▼", 116), "right": ("▶", 114)}
+# number pad: (label, keycode, column, row, width, height)
+KB_NUMPAD = [
+    ("Num", 77, 0, 0, 1, 1), ("/", 106, 1, 0, 1, 1), ("*", 63, 2, 0, 1, 1),
+    ("-", 82, 3, 0, 1, 1), ("7", 79, 0, 1, 1, 1), ("8", 80, 1, 1, 1, 1),
+    ("9", 81, 2, 1, 1, 1), ("+", 86, 3, 1, 1, 2), ("4", 83, 0, 2, 1, 1),
+    ("5", 84, 1, 2, 1, 1), ("6", 85, 2, 2, 1, 1), ("1", 87, 0, 3, 1, 1),
+    ("2", 88, 1, 3, 1, 1), ("3", 89, 2, 3, 1, 1), ("Enter", 104, 3, 3, 1, 2),
+    ("0", 90, 0, 4, 2, 1), (".", 91, 2, 4, 1, 1),
+]
+KB_NAMES = {9: "Esc", 22: "Backspace", 23: "Tab", 36: "Enter",
+            37: "Left Ctrl", 50: "Left Shift", 62: "Right Shift",
+            64: "Left Alt", 65: "Space", 66: "Caps Lock", 94: "\\ | key",
+            51: "# ~ key", 105: "Right Ctrl", 108: "Alt Gr", 111: "Up",
+            113: "Left", 114: "Right", 116: "Down", 119: "Delete",
+            133: "Windows", 49: "` key", 77: "Num Lock",
+            104: "Number pad Enter", 107: "Print Screen", 110: "Home",
+            115: "End", 112: "Page Up", 117: "Page Down", 118: "Insert",
+            135: "Menu"}
+
 KEYMAP = {
     "Escape": "ESC", "Tab": "TAB", "Caps_Lock": "CAPS", "Return": "ENTER",
     "space": "SPACE", "BackSpace": "BKSP",
@@ -3634,116 +3712,293 @@ class App:
         win.focus_force()
 
     def manual_keyboard(self):
+        """Laptop-shaped keyboard test (UK/IE or US layout). Keys are read
+        by their physical position (X keycode), so it works whatever
+        keyboard language Linux uses."""
         tk = self.tk
         win = tk.Toplevel(self.root)
         win.title("Keyboard test")
-        win.configure(bg=NAVY)
+        self.popup(win)
+        win.configure(bg=BG)
         sw, sh = win.winfo_screenwidth(), win.winfo_screenheight()
-        w, h = min(self.px(1320), sw), min(self.px(480), sh)
-        win.geometry("%dx%d+%d+%d" % (w, h, max(0, (sw - w) // 2),
-                                      max(0, (sh - h) // 2)))
-        tk.Label(win, text="Press every key. Keys turn green when they work.",
-                 font=self.F(12, True), fg=TEXT, bg=NAVY).pack(
-            pady=(self.px(14), self.px(8)))
-        cells, seen = {}, set()
-        pads = {}
-        state = {"numpad": False}
-        board = tk.Frame(win, bg=NAVY)
-        board.pack()
-        main = tk.Frame(board, bg=NAVY)
-        main.pack(side="left", anchor="n")
-        for row in KB_ROWS:
-            rf = tk.Frame(main, bg=NAVY)
-            rf.pack(pady=3)
-            for label, kid in row:
-                c = tk.Label(rf, text=label, font=self.F(10, True), fg=TEXT,
-                             bg=BORDER, width=max(3, len(label) + 1), pady=6)
-                c.pack(side="left", padx=2)
-                cells[kid] = c
-        # number pad on the right (greyed until a number-pad key is used)
-        npf = tk.Frame(board, bg=NAVY)
-        npf.pack(side="left", anchor="n", padx=(self.px(26), 0))
-        np_title = tk.Label(npf, text="Number pad\n(only if fitted)",
-                            font=self.F(9, True), fg=MUTED, bg=NAVY)
-        np_title.pack(pady=(0, 4))
-        for row in NUMPAD_ROWS:
-            rf = tk.Frame(npf, bg=NAVY)
-            rf.pack(anchor="w", pady=3)
-            for label, kid in row:
-                c = tk.Label(rf, text=label, font=self.F(10, True), fg=MUTED,
-                             bg=CARD2, width=4, pady=6)
-                c.pack(side="left", padx=2)
-                pads[kid] = c
-        counter = tk.Label(win, text="", font=self.F(10), fg=MUTED, bg=NAVY)
-        counter.pack(pady=(self.px(10), 4))
+        win.geometry("%dx%d+0+0" % (sw, sh))
+        try:
+            win.attributes("-fullscreen", True)
+        except Exception:
+            pass
+        cv = tk.Canvas(win, bg=BG, highlightthickness=0)
+        cv.pack(fill="both", expand=True)
+        st = {"layout": os.environ.get("ITAD_KB_LAYOUT", "uk"),
+              "ok": set(), "held": set(), "last": "-", "numpad": False}
+        nump_codes = {k[1] for k in KB_NUMPAD}
+        U = max(38, min(66, int((sw - 150) / 19.6)))
+        GAP = max(4, U // 10)
+        KH = U - GAP
+        FH = int(U * 0.62)
 
-        def needed():
-            n = dict(cells)
-            if state["numpad"]:
-                n.update(pads)
-            return n
+        def fnt(size, bold=True):
+            return (FONT, max(7, int(size * U / 58.0)),
+                    "bold" if bold else "normal")
 
-        def update():
-            need = needed()
-            got = len([k for k in seen if k in need])
-            counter.configure(text="%d of %d keys pressed%s" % (
-                got, len(need), "  (number pad included)"
-                if state["numpad"] else ""))
+        def rows():
+            return KB_UK if st["layout"] == "uk" else KB_US
 
-        def on_key(ev):
-            kid = NUMPAD_KEYMAP.get(ev.keysym) or KEYMAP.get(ev.keysym)
-            if not kid and len(ev.keysym) == 1:
-                kid = ev.keysym.upper()
-            if kid in pads and not state["numpad"]:
-                # this laptop has a number pad: now it must be tested too
-                state["numpad"] = True
-                np_title.configure(text="Number pad\n(test every key)",
-                                   fg=TEXT)
-                for c in pads.values():
-                    c.configure(bg=BORDER, fg=TEXT)
-            box = cells.get(kid) or pads.get(kid)
-            if box is not None and kid not in seen:
-                seen.add(kid)
-                box.configure(bg=OK, fg=NAVY)
-                update()
+        def required():
+            req = {kc for _l, _s, kc, _w in KB_FROW if kc}
+            for row in rows():
+                for _l, _s, kc, _w in row:
+                    if kc:
+                        req.add(kc)
+            req |= {kc for _n, (_a, kc) in KB_ARROWS.items()}
+            if st["numpad"]:
+                req |= nump_codes
+            return req
+
+        def name_of(kc):
+            if kc in KB_NAMES:
+                return KB_NAMES[kc]
+            for lab, _s, k, _w in KB_FROW:
+                if k == kc:
+                    return lab
+            for row in rows():
+                for lab, sh_, k, _w in row:
+                    if k == kc and lab and not lab.startswith("ENTER"):
+                        return lab.upper() if len(lab) == 1 else lab
+            for lab, k, *_r in KB_NUMPAD:
+                if k == kc:
+                    return "Number pad " + lab
+            return "key %d" % kc
+
+        def key(x, y, w, h, main, shift, kc, state=None):
+            """Draw one keycap. state: idle / ok / held / na."""
+            if state is None:
+                state = ("held" if kc in st["held"] else
+                         "ok" if kc in st["ok"] else "idle")
+            x1, y1 = x + w, y + h
+            pal = {"ok": ("#13784E", "#1FBF7E", "#03140C", "#0B4A31",
+                          "#34D399"),
+                   "held": ("#1350B5", "#2E8BFF", "#FFFFFF", "#CFE3FF",
+                            "#7CC0FF"),
+                   "na": ("#0B1A33", "#0E2140", "#4C6489", "#4C6489", ""),
+                   "idle": ("#0D2245", "#183461", "#EAF2FF", "#8EA6C8",
+                            "")}[state]
+            base, face, fg, sub, glow = pal
+            if glow:
+                round_rect(cv, x - 3, y - 3, x1 + 3, y1 + 3, 10, fill="",
+                           outline=glow, width=2)
+            round_rect(cv, x, y, x1, y1, 8, fill=base, outline="")
+            round_rect(cv, x + 2, y + 1, x1 - 2, y1 - 4, 7, fill=face,
+                       outline="#2A5596" if state == "idle" else "")
+            if shift:
+                cv.create_text(x + 9 * U / 58, y + 11 * U / 58, text=shift,
+                               fill=sub, font=fnt(10), anchor="w")
+                cv.create_text(x + 9 * U / 58, y1 - 15 * U / 58, text=main,
+                               fill=fg, font=fnt(13), anchor="w")
+            elif main:
+                cv.create_text((x + x1) / 2, (y + y1) / 2 - 2, text=main,
+                               fill=fg, font=fnt(15 if len(main) <= 2
+                                                 else 11))
+
+        def redraw():
+            cv.delete("all")
+            W = cv.winfo_width() or sw
+            deck_w = 15 * U + 44
+            pad_w = 4 * U + 38
+            X0 = int((W - (deck_w + 34 + pad_w)) / 2) + 22
+            top = int(U * 1.9)
+            cv.create_text(W / 2, U * 0.55, text="Keyboard test",
+                           fill=TEXT, font=fnt(22))
+            cv.create_text(W / 2, U * 1.05, fill=MUTED, font=fnt(12, False),
+                           text="Press every key once. Keys turn green when "
+                                "they work. Hold Fn for F1-F12 if they "
+                                "change volume / brightness.")
+            # layout switch (top right)
+            sx = W - 250 * U / 58 - 20
+            sy = U * 0.3
+            round_rect(cv, sx, sy, sx + 230 * U / 58, sy + 32 * U / 58, 16,
+                       fill=NAVY, outline=BORDER)
+            for i, (lay, txt) in enumerate((("uk", "UK / Ireland"),
+                                            ("us", "US"))):
+                bx = sx + 3 + i * 114 * U / 58
+                on = st["layout"] == lay
+                t = "lay_" + lay
+                round_rect(cv, bx, sy + 3, bx + 110 * U / 58,
+                           sy + 29 * U / 58, 13,
+                           fill=BLUE if on else NAVY, outline="", tags=t)
+                cv.create_text(bx + 55 * U / 58, sy + 16 * U / 58, text=txt,
+                               fill="white" if on else MUTED, font=fnt(11),
+                               tags=t)
+                cv.tag_bind(t, "<Button-1>",
+                            lambda e, l=lay: set_layout(l))
+            # keyboard deck
+            y_end = top + FH + GAP + 5 * (KH + GAP) + 16
+            round_rect(cv, X0 - 22, top - 22, X0 + 15 * U + 22, y_end, 22,
+                       fill="#081A35", outline=BORDER, width=2)
+            NX = X0 + 15 * U + 56
+            round_rect(cv, NX - 22, top - 22, NX + 4 * U + 16, y_end, 22,
+                       fill="#081A35", outline=BORDER, width=2)
+            x = X0
+            for lab, _s, kc, w in KB_FROW:
+                key(x, top, w * U - GAP, FH, lab, "", kc)
+                x += w * U
+            y = top + FH + GAP
+            ex0 = ew = 0
+            for row in rows():
+                x = X0
+                for lab, sh_, kc, w in row:
+                    if lab == "ENTER_TOP":
+                        ex0, ew = x, w
+                        x += w * U
+                        continue
+                    if lab == "ENTER_LOW":
+                        stt = ("held" if kc in st["held"] else
+                               "ok" if kc in st["ok"] else "idle")
+                        # tall ISO Enter = top part + lower part
+                        key(ex0, y - KH - GAP, ew * U - GAP, KH + 2,
+                            "", "", kc, stt)
+                        key(x, y - KH - GAP, w * U - GAP, 2 * KH + GAP,
+                            "", "", kc, stt)
+                        face = {"ok": "#1FBF7E", "held": "#2E8BFF"}.get(
+                            stt, "#183461")
+                        cv.create_rectangle(x + 2, y - KH - GAP + 2,
+                                            x + w * U - GAP - 3, y - GAP - 2,
+                                            fill=face, outline="")
+                        cv.create_text(ex0 + ew * U / 2 - 4,
+                                       y - KH / 2 - GAP - 2,
+                                       text="Enter ↵", font=fnt(11),
+                                       fill="#03140C" if stt == "ok"
+                                       else TEXT)
+                        x += w * U
+                        continue
+                    if lab == "ARROWS":
+                        hh = (KH - 3) / 2
+                        for nm, (cx, cy) in (("up", (1, 0)), ("left", (0, 1)),
+                                             ("down", (1, 1)),
+                                             ("right", (2, 1))):
+                            a, kc2 = KB_ARROWS[nm]
+                            key(x + cx * U, y + cy * (hh + 3), U - GAP, hh,
+                                a, "", kc2)
+                        x += w * U
+                        continue
+                    key(x, y, w * U - GAP, KH, lab, sh_, kc,
+                        "na" if not kc else None)
+                    x += w * U
+                y += KH + GAP
+            # number pad
+            cv.create_text(NX + 2 * U - 3, top + 4, text="NUMBER PAD",
+                           font=fnt(11), fill=TEXT if st["numpad"] else MUTED)
+            cv.create_text(NX + 2 * U - 3, top + 22 * U / 58,
+                           font=fnt(9, False),
+                           text=("found - test every key" if st["numpad"]
+                                 else "tested only if this laptop has one"),
+                           fill=OK if st["numpad"] else MUTED)
+            ny = top + FH + GAP
+            for lab, kc, c, r, w, h in KB_NUMPAD:
+                hh = h * KH + (h - 1) * GAP
+                stt = None if (st["numpad"] or kc in st["ok"]) else "na"
+                key(NX + c * U, ny + r * (KH + GAP), w * U - GAP, hh, lab,
+                    "", kc, stt)
+            # progress
+            req = required()
+            got = len(req & st["ok"])
+            py = y_end + 26
+            RX = NX + 4 * U + 16
+            round_rect(cv, X0 - 22, py, RX, py + 12, 6, fill="#0F2447",
+                       outline="")
+            frac = got / float(max(1, len(req)))
+            if got:
+                round_rect(cv, X0 - 22, py, X0 - 22 + (RX - X0 + 22) * frac,
+                           py + 12, 6, fill="#1FA971", outline="")
+            cv.create_text(X0 - 22, py + 34, anchor="w", fill=TEXT,
+                           font=fnt(14),
+                           text="%d of %d keys tested" % (got, len(req)))
+            cv.create_text(RX, py + 34, anchor="e", fill=MUTED,
+                           font=fnt(12, False),
+                           text="Last key:  %s" % st["last"])
+            miss = [name_of(k) for k in sorted(req - st["ok"])]
+            if miss and got:
+                cv.create_text(X0 - 22, py + 62, anchor="w", fill=WARN,
+                               font=fnt(11, False),
+                               text="Not pressed yet:  " + ",  ".join(
+                                   miss[:10]) + ("  ..." if len(miss) > 10
+                                                 else ""))
+            elif not miss:
+                cv.create_text(X0 - 22, py + 62, anchor="w", fill=OK,
+                               font=fnt(12), text="All keys work - "
+                                                  "press Done.")
+
+        def set_layout(lay):
+            st["layout"] = lay
+            os.environ["ITAD_KB_LAYOUT"] = lay
+            redraw()
+
+        def on_press(ev):
+            kc = ev.keycode
+            if kc in nump_codes and not st["numpad"]:
+                st["numpad"] = True
+            if kc == 94 and st["layout"] != "uk":
+                st["layout"] = "uk"        # only ISO (UK/IE) keyboards
+                os.environ["ITAD_KB_LAYOUT"] = "uk"
+            st["held"].add(kc)
+            st["last"] = name_of(kc)
+            redraw()
             return "break"
 
+        def on_release(ev):
+            kc = ev.keycode
+            st["held"].discard(kc)
+            st["ok"].add(kc)
+            redraw()
+            return "break"
+
+        def result_notes(prefix):
+            req = required()
+            lay = "UK/Ireland" if st["layout"] == "uk" else "US"
+            miss = [name_of(k) for k in sorted(req - st["ok"])]
+            n = ["%s %d of %d keys pressed (%s layout%s)" % (
+                prefix, len(req & st["ok"]), len(req), lay,
+                ", with number pad" if st["numpad"] else "")]
+            if miss:
+                n.append("Not pressed: " + ", ".join(miss[:14]) +
+                         (" ..." if len(miss) > 14 else ""))
+            return n, miss
+
         def done():
+            notes, miss = result_notes("")
             win.destroy()
-            need = needed()
-            cells_all = dict(cells)
-            cells.clear()
-            cells.update(need)
-            if all(k in seen for k in need):
+            if not miss:
                 self.finish_manual("Keyboard", "PASS",
-                                   ["All %d keys pressed%s" % (
-                                       len(cells), " (with number pad)"
-                                       if state["numpad"] else "")])
+                                   [notes[0].strip().replace(
+                                       " of ", " of ", 1)])
             else:
-                # Not every key was pressed, so the keyboard is not proven.
-                missing = sorted(set(cells) - seen)
                 self.finish_manual("Keyboard", "WARN",
-                                   ["Partial test: %d of %d keys pressed. "
-                                    "Not pressed: %s" % (
-                                        len(seen), len(cells),
-                                        ", ".join(missing[:12])
-                                        + (" ..." if len(missing) > 12
-                                           else ""))])
+                                   ["Partial test:" + notes[0]] + notes[1:])
 
         def failed():
+            notes, _m = result_notes("Key not working.")
             win.destroy()
-            missing = sorted(set(needed()) - seen)
-            self.finish_manual("Keyboard", "FAIL",
-                               ["Key not working. Not pressed: "
-                                + ", ".join(missing[:12])])
+            self.finish_manual("Keyboard", "FAIL", notes)
 
-        bf = tk.Frame(win, bg=NAVY)
-        bf.pack(pady=self.px(8))
-        self.btn(bf, "Done", done).pack(side="left", padx=6)
-        self.btn(bf, "A key does not work", failed, "danger").pack(side="left")
-        update()
-        win.bind("<KeyPress>", on_key)
-        win.focus_force()
+        def again():
+            st["ok"].clear()
+            st["held"].clear()
+            st["numpad"] = False
+            st["last"] = "-"
+            redraw()
+
+        bf = tk.Frame(win, bg=BG)
+        bf.place(relx=0.5, rely=1.0, y=-self.px(24), anchor="s")
+        Pill(self, bf, "Done", done, width=190, height=46).pack(
+            side="left", padx=8)
+        Pill(self, bf, "A key does not work", failed, width=230, height=46,
+             kind="danger").pack(side="left", padx=8)
+        Pill(self, bf, "Start again", again, width=150, height=46,
+             kind="ghost").pack(side="left", padx=8)
+        win.bind("<KeyPress>", on_press)
+        win.bind("<KeyRelease>", on_release)
+        cv.bind("<Configure>", lambda e: redraw())
+        win.protocol("WM_DELETE_WINDOW", done)
+        win.after(100, lambda: (redraw(), win.focus_force()))
 
     def manual_speakers(self):
         tk = self.tk
