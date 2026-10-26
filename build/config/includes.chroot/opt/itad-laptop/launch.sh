@@ -90,19 +90,18 @@ log "launch.sh started from $APP_DIR"
 # 1. Never let the screen go blank or sleep
 sudo setterm -blank 0 -powerdown 0 2>/dev/null || true
 
-# 2. Find and mount the ITAD_DATA stick (for reports)
-dev="$(blkid -L "$DATA_LABEL" 2>/dev/null || true)"
-if [ -n "$dev" ]; then
-    sudo mkdir -p "$DATA_MNT"
-    sudo mountpoint -q "$DATA_MNT" || sudo mount -o rw "$dev" "$DATA_MNT" 2>>"$LOG"
-    sudo chmod 777 "$DATA_MNT"
-    export ITAD_DATA="$DATA_MNT"
-    log "ITAD_DATA stick mounted from $dev"
-else
+# 2. Find (or make) a place to save reports: ITAD_DATA partition,
+#    another USB stick, or the boot stick itself (see itad_storage.sh)
+read -r ITAD_DATA ITAD_DATA_PERSIST ITAD_DATA_WHERE <<EOF_ST
+$(sudo bash "$APP_DIR/itad_storage.sh" 2>>"$LOG")
+EOF_ST
+if [ -z "$ITAD_DATA" ] || [ ! -d "$ITAD_DATA" ]; then
     mkdir -p /tmp/itad-reports
-    export ITAD_DATA="/tmp/itad-reports"
-    log "no ITAD_DATA stick found, using /tmp/itad-reports"
+    ITAD_DATA=/tmp/itad-reports; ITAD_DATA_PERSIST=0; ITAD_DATA_WHERE=memory_only
 fi
+sudo chmod 777 "$ITAD_DATA" 2>/dev/null
+export ITAD_DATA ITAD_DATA_PERSIST ITAD_DATA_WHERE
+log "reports go to $ITAD_DATA (persistent=$ITAD_DATA_PERSIST, $ITAD_DATA_WHERE)"
 
 # 3. Wait for the graphical screen (up to 30 seconds)
 if [ -z "${DISPLAY:-}" ] && [ -S /tmp/.X11-unix/X0 ]; then
@@ -143,7 +142,7 @@ fi
 if [ -z "$PROBLEM" ]; then
     log "starting laptop_window.py on $DISPLAY"
     cd "$APP_DIR" || true
-    sudo -E ITAD_DATA="$ITAD_DATA" DISPLAY="$DISPLAY" python3 "$WINDOW" >>"$WINLOG" 2>&1
+    sudo -E ITAD_DATA="$ITAD_DATA" ITAD_DATA_PERSIST="$ITAD_DATA_PERSIST" ITAD_DATA_WHERE="$ITAD_DATA_WHERE" DISPLAY="$DISPLAY" python3 "$WINDOW" >>"$WINLOG" 2>&1
     code=$?
     log "laptop_window.py exited with code $code (details in $WINLOG)"
     if [ "$code" -ne 0 ]; then

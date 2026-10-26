@@ -24,6 +24,8 @@
 #   * v3.1: green boot text (GRUB + Linux) instead of a dark screen before
 #     the boot screen starts; plymouth quits normally (fixes the freeze and
 #     glitching on some laptops).
+#   * v3.2: the ISO has an empty 300 MB ITAD_DATA partition (FAT32) for
+#     reports, keys and removal requests.
 #   * Faster: system files packed with zstd (much quicker to read from a
 #     USB stick), no waiting for the network, unused services switched off.
 set -euo pipefail
@@ -55,6 +57,7 @@ printf '%s\n' plymouth plymouth-themes xorg xinit openbox xterm python3 \
   ntfs-3g alsa-utils network-manager smartmontools dmidecode hdparm \
   nvme-cli pciutils usbutils lshw iw rfkill parted fonts-dejavu-core zstd \
   bluez python3-cryptography ffmpeg v4l-utils firmware-sof-signed alsa-ucm-conf \
+  dosfstools exfatprogs \
   > "$CFG/package-lists/itad.list.chroot"
 
 # NICE-TO-HAVE packages: installed one by one by a hook (step 4).
@@ -354,7 +357,7 @@ chmod 0440 "$INC/etc/sudoers.d/live-nopasswd"
 A="$INC/opt/itad-laptop"; mkdir -p "$A"
 for f in "$INC"/opt/*.py "$INC"/opt/*.sh; do [ -f "$f" ] && cp -f "$f" "$A/"; done
 ls -1 "$A"
-for n in laptop_window.py laptop_check.py laptop_wipe.py laptop_test.py itad_run.py launch.sh; do
+for n in laptop_window.py laptop_check.py laptop_wipe.py laptop_test.py itad_run.py launch.sh itad_storage.sh; do
   [ -f "$A/$n" ] || { echo "ERROR: $n missing" >&2; exit 1; }
 done
 chmod +x "$A"/*.sh "$A"/*.py
@@ -442,4 +445,26 @@ lb build
 ISO="$(ls -1t live-image-*.hybrid.iso binary.hybrid.iso 2>/dev/null | head -n1 || true)"
 [ -n "$ISO" ] || { echo "ERROR: no ISO produced" >&2; exit 1; }
 mv -f "$ISO" itad-laptop.iso
+ls -lh itad-laptop.iso
+
+echo "== 6. Add an empty ITAD_DATA partition for reports =="
+# A 300 MB FAT32 partition called ITAD_DATA is added to the image, so
+# every USB written from this ISO has a place to save reports (shown as a
+# separate drive in Windows). If this step fails, the normal ISO is kept.
+if command -v xorriso >/dev/null && command -v mkfs.vfat >/dev/null; then
+  rm -f itad_data.img itad-laptop-data.iso
+  truncate -s 300M itad_data.img
+  mkfs.vfat -F 32 -n ITAD_DATA itad_data.img >/dev/null
+  if xorriso -indev itad-laptop.iso -outdev itad-laptop-data.iso \
+       -boot_image any replay \
+       -append_partition 3 0x0c itad_data.img 2>&1 | tail -n 5; then
+    if [ -s itad-laptop-data.iso ]; then
+      mv -f itad-laptop-data.iso itad-laptop.iso
+      echo "ITAD_DATA partition added"
+    fi
+  else
+    echo "WARNING: could not add the ITAD_DATA partition (ISO kept as is)"
+  fi
+  rm -f itad_data.img itad-laptop-data.iso
+fi
 ls -lh itad-laptop.iso

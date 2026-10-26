@@ -1,7 +1,15 @@
 #!/usr/bin/env python3
 """
-laptop_window.py - ITAD Laptop window (v1.7.0)
+laptop_window.py - ITAD Laptop window (v1.7.1)
 This is the GRAPHICAL USER INTERFACE (GUI).
+
+v1.7.1
+  - Reports are kept on a USB stick: the ITAD_DATA partition of the boot
+    USB, any other USB stick, or the boot stick itself (itad_storage.sh).
+  - FIX: without a stick the window said "Report saved" although the
+    report was only in memory (lost at power off). Now it says so in red,
+    and the Home screen warns before the job starts.
+  - Settings shows exactly where reports are saved.
 
 v1.7.0
   - "What to do next" box on the Checks screen. It tells the technician
@@ -126,7 +134,7 @@ try:
 except Exception:
     TZ = None
 
-VERSION = "1.7.0"
+VERSION = "1.7.1"
 TOOLS_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # --- THESE ARE THE FILES THIS GUI WILL RUN ---
@@ -288,10 +296,32 @@ def safe_name(s):
     return re.sub(r"[^A-Za-z0-9._-]", "_", str(s)) or "UNKNOWN"
 
 
+STORE_NAMES = {
+    "ITAD_DATA_created_on_boot_USB": "the ITAD_DATA part of the boot USB",
+    "boot_stick_folder": "the boot USB (ITAD_REPORTS folder)",
+    "USB_stick_folder": "the USB stick (ITAD_REPORTS folder)",
+    "Ventoy_stick_folder": "the Ventoy USB (ITAD_REPORTS folder)",
+}
+
+
+def store_name():
+    w = os.environ.get("ITAD_DATA_WHERE", "")
+    if w.startswith("ITAD_DATA_on_"):
+        return "the ITAD_DATA drive (%s)" % w[len("ITAD_DATA_on_"):]
+    return STORE_NAMES.get(w, "")
+
+
 def pick_out_dir():
     env = os.environ.get("ITAD_DATA")
     if env and os.path.isdir(env) and os.access(env, os.W_OK):
-        return env, True
+        # launch.sh says whether this folder is on a stick (kept) or only
+        # in memory; without that, only a mounted drive counts as kept
+        flag = os.environ.get("ITAD_DATA_PERSIST")
+        if flag in ("0", "1"):
+            return env, flag == "1"
+        real = os.path.realpath(env)
+        on_disk = not real.startswith(("/tmp", "/run/user", "/dev/shm"))
+        return env, on_disk
     for c in ("/mnt/itad", "/media/ITAD_DATA", "/mnt/ITAD_DATA"):
         if os.path.ismount(c) and os.access(c, os.W_OK):
             return c, True
@@ -2562,6 +2592,12 @@ class App:
             self.hm_btn.configure(text="Login", command=self.home_login)
             for w in (self.h_sep2, self.h_user_i, self.h_user):
                 w.pack_forget()
+        if not self.persistent:
+            self.hm_who2.configure(text="WARNING: reports will NOT be kept "
+                                        "- no USB stick to save them on",
+                                   fg=BAD)
+        else:
+            self.hm_who2.configure(fg=MUTED)
         vals = {"Job ID": self.job() if self.job_active else "-",
                 "Asset ID": (self.asset() or "-") if self.job_active else "-",
                 "Serial Number": self.serial() or "-",
@@ -4668,12 +4704,13 @@ class App:
         if not saved:
             msg = "Report NOT saved"
         elif self.persistent:
-            msg = "Report saved (%s)%s" % (
+            msg = "Report saved on %s (%s)%s" % (
+                store_name() or "the USB stick",
                 kinds, " - digitally signed" if (rep.get("integrity") or {})
                 .get("signed") else " - NOT signed")
         else:
-            msg = ("Report saved to memory only - copy it before "
-                   "powering off (no ITAD_DATA stick)")
+            msg = ("NOT KEPT: report is in memory only and is lost at power "
+                   "off - no USB stick to save it on")
         self.r_files.configure(text=msg, fg=BAD if not saved else (
             MUTED if self.persistent else WARN))
         has_pdf = any(p.endswith(".pdf") for p in saved)
@@ -4763,11 +4800,14 @@ class App:
 
     def refresh_settings(self):
         self.st_store.configure(
-            text=("Saved to the ITAD_DATA stick:\n%s" % self.out_dir)
+            text=("Reports are saved on %s:\n%s" % (
+                store_name() or "the USB stick", self.out_dir))
             if self.persistent else
-            ("No ITAD_DATA stick found.\nFiles go to %s and are lost at "
-             "power off." % self.out_dir),
-            fg=OK if self.persistent else WARN)
+            ("Reports are NOT kept: no USB stick to save them on.\nThey "
+             "are only in memory (%s) and are lost at power off.\nPlug in "
+             "any USB stick (FAT32 / exFAT / NTFS) and restart, or write "
+             "the boot USB with the latest ISO." % self.out_dir),
+            fg=OK if self.persistent else BAD)
         acc = load_accounts(self.out_dir)
         ready = sorted(a["name"] for a in acc.values() if a["hash"])
         nopw = sorted(a["name"] for a in acc.values() if not a["hash"])
