@@ -155,7 +155,7 @@ try:
 except Exception:
     TZ = None
 
-VERSION = "1.8.0"
+VERSION = "1.8.1"
 TOOLS_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # --- THESE ARE THE FILES THIS GUI WILL RUN ---
@@ -3075,7 +3075,7 @@ class App:
         if not self.test_mode:
             if self.job_active:
                 self.mb.showinfo("Test mode", "Finish this job (or press "
-                                 "Next laptop) before turning on Test mode.")
+                                 "Shut down) before turning on Test mode.")
                 return
             if not self.mb.askyesno(
                     "Turn on Test mode?",
@@ -4851,8 +4851,13 @@ class App:
         self.r_files.pack(fill="x", padx=self.px(30), pady=(0, 4))
         left, right, mid = self.bar(pg)
         self.btn(left, "Home", lambda: self.show("home"), "ghost").pack()
-        Pill(self, right, "Next laptop", self.next_laptop, width=230,
-             height=48, icon="play").pack()
+        # one laptop per boot (the USB is in this laptop), so the job
+        # ends with Shut down - no "Next laptop"
+        Pill(self, right, "Shut down", self.power_off, width=230,
+             height=48, icon="power").pack(side="right")
+        self.save_again_btn = self.btn(right, "Save again", self.save_again,
+                                       "ghost")
+        self.save_again_btn.pack(side="right", padx=self.px(10))
 
     def collect_tests(self):
         tests = []
@@ -4985,21 +4990,32 @@ class App:
             col = OK if v in ("CLEAR", "CLEAN", "WIPED") else TEXT
             self.lbl(self.r_right, v, 11, True, fg=col, wraplength=360).grid(
                 row=r, column=1, sticky="nw", pady=2)
+        self.show_report_saved(rep)
+
+    def show_report_saved(self, rep):
         saved = self.save_reports(rep)
         kinds = ", ".join(os.path.splitext(p)[1][1:].upper() for p in saved
                           if not p.endswith((".json", ".log")))
+        errs = getattr(self, "save_errors", [])
+        where = getattr(self, "saved_where", "")
+        in_tmp = where.startswith("/tmp")
         if not saved:
-            msg = "Report NOT saved"
-        elif self.persistent:
+            msg = ("Report NOT saved - " + (errs[-1] if errs else
+                   "unknown error") + ". Check USB B (ITAD_DATA) is "
+                   "plugged in, then press Save again.")
+        elif in_tmp or not self.persistent:
+            msg = ("NOT KEPT: report is in memory only and is lost at power "
+                   "off - " + (errs[-1] if errs else "no USB stick to save "
+                   "it on") + ". Plug in USB B and press Save again.")
+        else:
             msg = "Report saved on %s (%s)%s" % (
                 store_name() or "the USB stick",
                 kinds, " - digitally signed" if (rep.get("integrity") or {})
                 .get("signed") else " - NOT signed")
-        else:
-            msg = ("NOT KEPT: report is in memory only and is lost at power "
-                   "off - no USB stick to save it on")
         self.r_files.configure(text=msg, fg=BAD if not saved else (
-            MUTED if self.persistent else WARN))
+            MUTED if (self.persistent and not in_tmp) else WARN))
+        self.report_kept = bool(saved) and self.persistent and not in_tmp
+        self.last_rep = rep
         has_pdf = any(p.endswith(".pdf") for p in saved)
         self.set_stage("report", "ok" if has_pdf else (
             "warn" if saved else "bad"),
@@ -5016,41 +5032,79 @@ class App:
             return self.out_dir
 
     def save_reports(self, rep):
+        """Save TXT, JSON, PDF and log. Always saves, whatever the result
+        (PASS, FAIL or INCOMPLETE). If the reports folder can't be written
+        it tries the stick's top folder, then memory, and keeps the real
+        error so the screen can say why."""
         # The date and time in the name keeps an earlier report of the
         # same laptop (a re-test) instead of writing over it.
         base = "SN_%s_%s" % (
             safe_name(rep["serial"] if rep["serial"] != "UNKNOWN"
                       else rep["asset_id"]),
             now().strftime("%Y%m%d-%H%M%S"))
-        obs = rep["observations"]
-        rdir = self.report_dir()
-        copied = []
-        for n, src in enumerate(obs.get("photos") or [], start=1):
-            ext = os.path.splitext(src)[1].lower() or ".jpg"
-            dst = os.path.join(rdir, "%s_photo%d%s" % (base, n, ext))
-            try:
-                if os.path.realpath(src) != os.path.realpath(dst):
-                    shutil.copyfile(src, dst)
-                copied.append(dst)
-            except Exception:
-                pass
-        obs["photo_files"] = copied
+        self.save_errors = []
+        self.saved_where = ""
         # sign last: the fingerprint covers everything in the report
-        sign_report(rep, self.out_dir, self.persistent)
-        saved = []
-        for ext, fn in (("txt", lambda p: open(p, "w").write(render_txt(rep))),
-                        ("json", lambda p: json.dump(rep, open(p, "w"),
-                                                     indent=2)),
-                        ("pdf", lambda p: write_pdf(p, rep)),
-                        ("log", lambda p: open(p, "w").write(
-                            "\n".join(self.log) + "\n"))):
-            path = os.path.join(rdir, "%s.%s" % (base, ext))
+        try:
+            sign_report(rep, self.out_dir, self.persistent)
+        except Exception as e:
+            self.save_errors.append("signing: %s" % e)
+            rep.setdefault("integrity", {"signed": False,
+                                         "note": "signing failed: %s" % e})
+        obs = rep["observations"]
+        dirs = []
+        for d in (self.report_dir(), self.out_dir, "/tmp/itad-reports"):
+            if d and d not in dirs:
+                dirs.append(d)
+        for rdir in dirs:
             try:
-                fn(path)
-                saved.append(path)
-            except Exception:
-                pass
-        return saved
+                os.makedirs(rdir, exist_ok=True)
+            except Exception as e:
+                self.save_errors.append("%s: %s" % (rdir, e))
+                continue
+            copied = []
+            for n, src in enumerate(obs.get("photos") or [], start=1):
+                ext = os.path.splitext(src)[1].lower() or ".jpg"
+                dst = os.path.join(rdir, "%s_photo%d%s" % (base, n, ext))
+                try:
+                    if os.path.realpath(src) != os.path.realpath(dst):
+                        shutil.copyfile(src, dst)
+                    copied.append(dst)
+                except Exception:
+                    pass
+            obs["photo_files"] = copied
+
+            def wtxt(p, text):
+                with open(p, "w") as f:
+                    f.write(text)
+
+            def wjson(p):
+                with open(p, "w") as f:
+                    json.dump(rep, f, indent=2, default=str)
+
+            saved = []
+            for ext, fn in (("txt", lambda p: wtxt(p, render_txt(rep))),
+                            ("json", wjson),
+                            ("pdf", lambda p: write_pdf(p, rep)),
+                            ("log", lambda p: wtxt(
+                                p, "\n".join(self.log) + "\n"))):
+                path = os.path.join(rdir, "%s.%s" % (base, ext))
+                try:
+                    fn(path)
+                    saved.append(path)
+                except Exception as e:
+                    self.save_errors.append("%s %s: %s" % (
+                        ext.upper(), rdir, e))
+                    self.log.append("Report %s not written to %s: %s" % (
+                        ext, rdir, e))
+            if any(p.endswith((".txt", ".pdf")) for p in saved):
+                try:
+                    os.sync()
+                except Exception:
+                    pass
+                self.saved_where = rdir
+                return saved
+        return []
 
     # ---------- settings and about ----------
     def build_settings(self):
@@ -5155,11 +5209,46 @@ class App:
         # keeps ITAD_SIGNED_IN so the technician stays signed in
         os.execv(PY, [PY] + sys.argv)
 
+    def save_again(self):
+        """Try saving the report again (e.g. after plugging USB B back in)."""
+        rep = getattr(self, "last_rep", None)
+        if not rep:
+            return
+        self.r_files.configure(text="Looking for USB B and saving...",
+                               fg=MUTED)
+        self.root.update_idletasks()
+        try:
+            # same check as at boot: finds a re-plugged stick and does a
+            # real write test before it is used
+            line = subprocess.run(
+                (["bash"] if os.geteuid() == 0 else ["sudo", "-n", "bash"])
+                + [os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                "itad_storage.sh")],
+                capture_output=True, text=True, timeout=120).stdout.strip()
+            parts = line.split(" ", 2)
+            if len(parts) >= 2 and os.path.isdir(parts[0]):
+                self.out_dir = parts[0]
+                self.persistent = parts[1] == "1"
+                os.environ["ITAD_DATA"] = parts[0]
+                os.environ["ITAD_DATA_PERSIST"] = parts[1]
+                if len(parts) > 2:
+                    os.environ["ITAD_DATA_WHERE"] = parts[2]
+        except Exception as e:
+            self.log.append("Save again: storage check failed: %s" % e)
+        self.show_report_saved(rep)
+
     def power_off(self):
         if self.wiping:
             self.mb.showinfo("Wipe running", "A wipe is running. Do not power "
                              "off until it has finished.")
             return
+        if getattr(self, "last_rep", None) and not getattr(
+                self, "report_kept", True):
+            if not self.mb.askyesno(
+                    "Report not saved",
+                    "The report for this laptop is NOT saved on USB B.\n\n"
+                    "Shut down anyway? The report will be lost."):
+                return
         if self.mb.askyesno("Shut down", "Shut down this laptop now?"):
             if subprocess.call(["systemctl", "poweroff"]) != 0:
                 subprocess.call(["poweroff"])
