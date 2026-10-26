@@ -1,7 +1,24 @@
 #!/usr/bin/env python3
 """
-laptop_window.py - ITAD Laptop window (v1.6.0)
+laptop_window.py - ITAD Laptop window (v1.7.0)
 This is the GRAPHICAL USER INTERFACE (GUI).
+
+v1.7.0
+  - "What to do next" box on the Checks screen. It tells the technician
+    exactly what to do for this laptop:
+      * Absolute ACTIVE: do not wipe; where Absolute is in the BIOS for
+        this make (Dell / HP / Lenovo / ...); that it cannot be turned
+        off there once activated; the customer must unenrol it.
+      * Absolute not active: optional Permanently Disable in the BIOS.
+      * Autopilot / Intune / SCCM / Apple / Chromebook enrolment: what
+        the customer must remove, step by step.
+  - Reads the Absolute setting straight from the BIOS when the laptop
+    allows it (Linux firmware-attributes on many Dell / HP / Lenovo).
+  - Automatic customer removal request: when a laptop is BLOCKED, an
+    email-ready request with the serial number and exact steps for the
+    customer's IT team is saved to the ITAD_DATA stick (requests folder),
+    and the laptop is added to blocked_devices.csv (one list for all
+    blocked laptops, ready to send in one go).
 
 v1.6.0
   - FIX: the USB ports and Speakers windows stopped right after their
@@ -109,7 +126,7 @@ try:
 except Exception:
     TZ = None
 
-VERSION = "1.6.0"
+VERSION = "1.7.0"
 TOOLS_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # --- THESE ARE THE FILES THIS GUI WILL RUN ---
@@ -964,6 +981,224 @@ def render_txt(rep):
         else:
             add("%-14s: NOT signed (%s)" % ("Signed", integ.get("note", "")))
     return "\n".join(L) + "\n"
+
+
+# -----------------------------------------------------------------------------
+# Advice for blocked laptops (Absolute / enrolment)
+# -----------------------------------------------------------------------------
+BIOS_WHERE = {
+    "dell": "Press F2 at power on > BIOS Setup > Security > Absolute "
+            "(older BIOS: Computrace)",
+    "hp": "Press F10 at power on > Security > Absolute Persistence Module "
+          "(older BIOS: Advanced > System Options / Computrace)",
+    "lenovo": "Press F1 (ThinkPad) or F2 at power on > Security > Absolute "
+              "Persistence Module (older BIOS: Security > Anti-Theft > "
+              "Computrace)",
+    "microsoft": "Surface: hold Volume Up + Power > UEFI > Security. "
+                 "Absolute on Surface is controlled from the customer's "
+                 "Absolute console",
+    "fujitsu": "Press F2 at power on > Security > Absolute Persistence / "
+               "Computrace",
+    "panasonic": "Press F2 at power on > Security > Absolute / Computrace",
+    "acer": "Press F2 at power on > Security > Absolute / Computrace",
+    "asus": "Press F2 / Del at power on > Security > Absolute / Computrace",
+    "toshiba": "Press F2 at power on > Security > Computrace / Absolute",
+    "dynabook": "Press F2 at power on > Security > Computrace / Absolute",
+    "getac": "Press F2 at power on > Security > Absolute / Computrace",
+}
+
+
+def make_key(manufacturer):
+    m = (manufacturer or "").lower()
+    for k in BIOS_WHERE:
+        if k in m:
+            return k
+    if "hewlett" in m:
+        return "hp"
+    return ""
+
+
+def bios_absolute_settings():
+    """Absolute / Computrace settings read straight from the BIOS, where
+    Linux can see them (firmware-attributes: dell-wmi-sysman, hp-bioscfg,
+    think-lmi). Read only. Returns [(name, value)]."""
+    out = []
+    for p in glob.glob("/sys/class/firmware-attributes/*/attributes/*"):
+        n = os.path.basename(p)
+        if not re.search(r"absolute|computrace|persistence", n, re.I):
+            continue
+        val = ""
+        for f in ("current_value", "display_name"):
+            try:
+                with open(os.path.join(p, f)) as fh:
+                    v = fh.read().strip()
+                if f == "current_value":
+                    val = v
+                elif v and v != n:
+                    n = v
+            except Exception:
+                pass
+        out.append((n, val or "unknown"))
+    return out
+
+
+def blocked_kinds(data):
+    """What blocked this laptop: set of 'absolute', 'autopilot', 'intune',
+    'sccm', 'apple', 'chrome', 'other'."""
+    kinds = set()
+    if (data or {}).get("absolute_result") == "BLOCKED":
+        kinds.add("absolute")
+    text = " ".join(
+        [str(x) for x in (data or {}).get("block_reasons") or []] +
+        [str(e.get("description", "")) for e in
+         ((data or {}).get("autopilot_analysis") or {}).get("active", [])]
+    ).lower()
+    if "autopilot" in text:
+        kinds.add("autopilot")
+    if "intune" in text or "mdm" in text or "enrollment" in text \
+            or "enrolment" in text or "omadm" in text:
+        kinds.add("intune")
+    if "sccm" in text or "configuration manager" in text or "ccm" in text:
+        kinds.add("sccm")
+    if "apple" in text or "mdm profile" in text or "dep" in text:
+        if (data or {}).get("platform") == "mac":
+            kinds.add("apple")
+    if (data or {}).get("platform") == "chromebook" and \
+            (data or {}).get("result") == "BLOCKED":
+        kinds.add("chrome")
+    if (data or {}).get("autopilot_result") == "BLOCKED" and not (
+            kinds - {"absolute"}):
+        kinds.add("intune")
+    return kinds
+
+
+def advice(data, manufacturer, bios):
+    """(technician_steps, customer_steps) for the Checks screen."""
+    result = (data or {}).get("result", "?")
+    kinds = blocked_kinds(data)
+    mk = make_key(manufacturer)
+    where = BIOS_WHERE.get(mk, "BIOS Setup (usually F2, F10 or F1 at power "
+                                "on) > Security > Absolute / Computrace")
+    tech, cust = [], []
+    bios_txt = "; ".join("%s = %s" % (n, v) for n, v in bios[:3])
+    if "absolute" in kinds:
+        tech += ["Do NOT wipe. This laptop is ON HOLD.",
+                 "Absolute is ACTIVE - the laptop still reports to the "
+                 "customer's Absolute account.",
+                 "BIOS: %s." % where,
+                 "Once Absolute is activated, the BIOS option is greyed "
+                 "out - it can NOT be turned off there. Only the customer "
+                 "can release it."]
+        if bios_txt:
+            tech.append("BIOS setting read now: %s." % bios_txt)
+        cust += ["Absolute console (cc.absolute.com) > Active Devices > "
+                 "find serial %s > Device Action > Unenroll Device." %
+                 "{serial}"]
+    if kinds & {"autopilot", "intune"}:
+        tech += ["Do NOT wipe yet: the laptop is still registered to the "
+                 "customer (Autopilot / Intune). After a wipe it would "
+                 "set itself up for the customer again."]
+        cust += ["Intune admin center > Devices > Windows > select the "
+                 "device (serial {serial}) > Delete.",
+                 "Then Devices > Windows > Enrollment > Windows Autopilot > "
+                 "Devices > search serial {serial} > (Unassign user if "
+                 "shown) > Delete. Refresh until it is gone."]
+    if "sccm" in kinds:
+        tech += ["SCCM agent found: the wipe removes it, but tell the "
+                 "customer so they delete the device record."]
+        cust += ["Configuration Manager console > Assets and Compliance > "
+                 "Devices > delete the record for serial {serial}."]
+    if "apple" in kinds:
+        cust += ["Apple Business Manager > Devices > serial {serial} > "
+                 "Release Device, and turn off Activation Lock / Find My."]
+    if "chrome" in kinds:
+        cust += ["Google Admin console > Devices > Chrome > Devices > "
+                 "serial {serial} > Deprovision."]
+    if result == "BLOCKED":
+        tech += ["A removal request for the customer has been saved "
+                 "(see below). Send it, wait for their reply, then press "
+                 "Run check again."]
+    elif result == "CLEAR":
+        tech += ["Clear: you can wipe."]
+        low = bios_txt.lower()
+        if bios and not any(w in low for w in ("permanent", "disabled")):
+            tech.append("Optional: Absolute is not active but not "
+                        "permanently disabled. %s > Permanently Disable "
+                        "(this can never be turned back on)." % where)
+        elif not bios:
+            tech.append("Optional: check the BIOS (%s). If Absolute is "
+                        "not activated you can set Permanently Disable "
+                        "(can never be turned back on)." % where)
+    else:
+        tech += ["The check could not read everything (for example an "
+                 "encrypted drive). Ask a manager before wiping.",
+                 "BIOS: %s - check the Absolute state there." % where]
+    return tech, cust
+
+
+def write_removal_request(out_dir, rep_ident, data, tech, job, asset):
+    """Email-ready request for the customer + one CSV line for the
+    blocked list. Returns the request file path ('' on failure)."""
+    serial = rep_ident.get("serial") or "UNKNOWN"
+    _t, cust = advice(data, rep_ident.get("manufacturer", ""), [])
+    cust = [c.replace("{serial}", serial) for c in cust]
+    reasons = list((data or {}).get("block_reasons") or [])
+    model = ("%s %s" % (rep_ident.get("manufacturer", ""),
+                        rep_ident.get("model", ""))).strip()
+    stamp = now().strftime("%Y-%m-%d %H:%M")
+    lines = [
+        "Subject: Device removal needed - serial %s (job %s)" % (serial,
+                                                                 job),
+        "",
+        "Hello,",
+        "",
+        "We received the laptop below for secure data wiping and reuse. It "
+        "is still linked to your organisation, so we cannot wipe or "
+        "process it yet:",
+        "",
+        "  Serial number : %s" % serial,
+        "  Make / model  : %s" % (model or "-"),
+        "  Our job ID    : %s" % job,
+        "  Asset ID      : %s" % (asset or "-"),
+        "  Checked on    : %s by %s" % (stamp, tech or "-"),
+        "",
+        "What we found:",
+    ] + ["  - %s" % r for r in (reasons or ["device management found"])] + [
+        "",
+        "Please remove it from your systems:",
+    ] + ["  %d. %s" % (i, c) for i, c in enumerate(cust, start=1)] + [
+        "",
+        "Please reply when this is done and we will continue.",
+        "",
+        "Thank you",
+    ]
+    try:
+        rdir = os.path.join(out_dir, "requests")
+        os.makedirs(rdir, exist_ok=True)
+        path = os.path.join(rdir, "REMOVAL_REQUEST_%s_%s.txt" % (
+            safe_name(serial), now().strftime("%Y%m%d-%H%M")))
+        with open(path, "w") as f:
+            f.write("\n".join(lines) + "\n")
+        csvp = os.path.join(out_dir, "blocked_devices.csv")
+        new = not os.path.exists(csvp)
+        import csv
+        if not new:
+            with open(csvp, newline="") as f:
+                for r in csv.reader(f):
+                    if len(r) > 7 and r[3] == serial and \
+                            r[7] == "waiting for customer":
+                        return path        # already on the list
+        with open(csvp, "a", newline="") as f:
+            w = csv.writer(f)
+            if new:
+                w.writerow(["date", "job_id", "asset_id", "serial", "model",
+                            "technician", "blocked_by", "status"])
+            w.writerow([stamp, job, asset, serial, model, tech,
+                        "; ".join(sorted(blocked_kinds(data))) or "?",
+                        "waiting for customer"])
+        return path
+    except Exception:
+        return ""
 
 
 SIGN_FIELDS = ("integrity",)
@@ -2749,6 +2984,15 @@ class App:
         self.c_enr_note = self.lbl(e, "", 11, wraplength=560)
         self.c_enr_note.pack(anchor="w", pady=(self.px(8), 0))
         left, right, mid = self.bar(pg)
+        # bottom bar and advice box get their space before the two cards
+        left.master.pack_configure(before=row)
+        h_outer, h = self.card(pg, "What to do next", "info")
+        h_outer.pack(side="bottom", fill="x", padx=self.px(28),
+                     pady=(self.px(6), 0), before=row)
+        self.c_help = self.lbl(h, "", 10, wraplength=1250)
+        self.c_help.pack(anchor="w", fill="x")
+        self.c_req = self.lbl(h, "", 10, True, fg=CYAN, wraplength=1250)
+        self.c_req.pack(anchor="w", pady=(self.px(6), 0))
         self.btn(left, "Home", lambda: self.show("home"), "ghost").pack()
         self.c_status = mid
         self.c_again = self.btn(right, "Run check again", self.run_check,
@@ -2757,6 +3001,40 @@ class App:
         self.c_next = self.btn(right, "Continue to wipe", self.enter_wipe,
                                width=270)
         self.c_next.pack(side="left")
+
+    def show_advice(self, data):
+        """Fill the 'What to do next' box and save the removal request."""
+        ident = dict(self.ident)
+        ident.update((data.get("identity") or {}))
+        if self.serial():
+            ident["serial"] = self.serial()
+        bios = bios_absolute_settings()
+        tech, cust = advice(data, ident.get("manufacturer", ""), bios)
+        ser = ident.get("serial") or "UNKNOWN"
+        txt = "TECHNICIAN:\n" + "\n".join("  %d.  %s" % (i, t) for i, t in
+                                           enumerate(tech, start=1))
+        if cust:
+            txt += "\n\nCUSTOMER MUST DO:\n" + "\n".join(
+                "  -  " + c.replace("{serial}", ser) for c in cust)
+        self.c_help.configure(text=txt)
+        if data.get("result") == "BLOCKED":
+            path = write_removal_request(self.out_dir, ident, data,
+                                         self.tech(), self.job(),
+                                         self.asset())
+            self.s["removal_request"] = path
+            if path:
+                self.c_req.configure(
+                    text="Removal request saved: %s\nAdded to the blocked "
+                         "list: %s%s" % (
+                             path, os.path.join(self.out_dir,
+                                                "blocked_devices.csv"),
+                             "" if self.persistent else
+                             "\n(No ITAD_DATA stick: these files are lost "
+                             "at power off - copy them first.)"),
+                    fg=CYAN if self.persistent else WARN)
+            else:
+                self.c_req.configure(text="Could not save the removal "
+                                          "request.", fg=BAD)
 
     def test_mode_next(self):
         """Set the 'next' button on the check screen for the current mode."""
@@ -2780,6 +3058,8 @@ class App:
             w.configure(text=t, fg=MUTED)
         self.c_abs_note.configure(text="")
         self.c_enr_note.configure(text="")
+        self.c_help.configure(text="Checking...")
+        self.c_req.configure(text="")
         self.c_again.configure(state="disabled")
         self.c_next.configure(state="disabled")
         if not self.test_mode:
@@ -2822,6 +3102,7 @@ class App:
                (data.get("autopilot_analysis") or {}).get("active", [])])
         if data.get("absolute_signs"):
             self.c_abs_note.configure(text="\n".join(data["absolute_signs"][:4]))
+        self.show_advice(data)
         if result == "BLOCKED":
             self.banner("BLOCKED  -  DO NOT WIPE", "bad")
             self.set_stage("check", "bad", "Blocked - do not wipe")
