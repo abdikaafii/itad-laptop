@@ -1,5 +1,11 @@
 #!/bin/bash
-# itad_storage.sh - find (or make) a place to SAVE reports (v1.0.0)
+# itad_storage.sh - find (or make) a place to SAVE reports (v1.1.0)
+#
+# v1.1.0: a separate ITAD_DATA stick ("USB B", shared with SwitchSeal) is
+#         always used first, before the ITAD_DATA part of the boot USB.
+#         Every place is checked with a real write (1 MB, synced, read
+#         back) before it is used, so a stick that gives write errors is
+#         skipped instead of failing later.
 #
 # Run as root by launch.sh at every boot. Prints ONE line:
 #     <folder> <persistent 0|1> <description>
@@ -33,17 +39,18 @@ mount_it() {               # $1 = device
     mountpoint -q "$MNT" && umount "$MNT" 2>/dev/null
     mount -o rw,uid=1000,gid=1000,umask=000 "$1" "$MNT" 2>>"$LOG" \
         || mount -o rw "$1" "$MNT" 2>>"$LOG" || return 1
-    mkdir -p "$MNT" && touch "$MNT/.itad_write_test" 2>>"$LOG" || return 1
-    rm -f "$MNT/.itad_write_test"
+    write_ok "$MNT" || { umount "$MNT" 2>/dev/null; return 1; }
     return 0
 }
 
-# ---- 1. a partition called ITAD_DATA ------------------------------------
-dev="$(blkid -L "$LABEL" 2>/dev/null | head -n1)"
-if [ -n "$dev" ] && mount_it "$dev"; then
-    log "using ITAD_DATA partition $dev"
-    say "$MNT" 1 "ITAD_DATA_on_$dev"
-fi
+write_ok() {               # real write test: 1 MB, synced, read back
+    local t="$1/.itad_write_test"
+    dd if=/dev/urandom of="$t" bs=64k count=16 conv=fsync 2>>"$LOG" \
+        || { log "write test FAILED on $1"; rm -f "$t"; return 1; }
+    cat "$t" > /dev/null 2>>"$LOG" || { rm -f "$t"; return 1; }
+    rm -f "$t"; sync
+    return 0
+}
 
 # ---- find the boot USB ---------------------------------------------------
 MED=/run/live/medium
@@ -52,6 +59,26 @@ fstype="$(findmnt -no FSTYPE "$MED" 2>/dev/null)"
 log "boot medium: $src ($fstype)"
 bootdisk="$(lsblk -no PKNAME "$src" 2>/dev/null | head -n1)"
 [ -z "$bootdisk" ] && bootdisk="$(basename "$src")"
+
+# ---- 1. a partition called ITAD_DATA: separate stick first ---------------
+other=""; onboot=""
+for dev in $(blkid -t LABEL="$LABEL" -o device 2>/dev/null); do
+    pk="$(lsblk -no PKNAME "$dev" 2>/dev/null | head -n1)"
+    if [ "$pk" = "$bootdisk" ]; then onboot="$onboot $dev"
+    else other="$other $dev"; fi
+done
+for dev in $other; do
+    if mount_it "$dev"; then
+        log "using ITAD_DATA stick $dev"
+        say "$MNT" 1 "ITAD_DATA_stick_$dev"
+    fi
+done
+for dev in $onboot; do
+    if mount_it "$dev"; then
+        log "using ITAD_DATA part of the boot USB $dev"
+        say "$MNT" 1 "ITAD_DATA_created_on_boot_USB"
+    fi
+done
 
 # ---- 1a. Ventoy stick: its own data partition ----------------------------
 vdev="$(blkid -L Ventoy 2>/dev/null | head -n1)"
@@ -100,8 +127,7 @@ case "$fstype" in
     vfat|exfat|ntfs|ntfs3|fuseblk|ext4)
         if mount -o remount,rw "$MED" 2>>"$LOG" && \
                 mkdir -p "$MED/ITAD_REPORTS" 2>>"$LOG" && \
-                touch "$MED/ITAD_REPORTS/.t" 2>>"$LOG"; then
-            rm -f "$MED/ITAD_REPORTS/.t"
+                write_ok "$MED/ITAD_REPORTS"; then
             log "boot stick is writable ($fstype): $MED/ITAD_REPORTS"
             say "$MED/ITAD_REPORTS" 1 "boot_stick_folder"
         fi

@@ -1,7 +1,17 @@
 #!/usr/bin/env python3
 """
-laptop_window.py - ITAD Laptop window (v1.7.1)
+laptop_window.py - ITAD Laptop window (v1.7.2)
 This is the GRAPHICAL USER INTERFACE (GUI).
+
+v1.7.2
+  - Same technician logins as SwitchSeal: technicians.txt on the
+    ITAD_DATA stick (USB B) with lines "Name:password" is read as well as
+    LaptopSeal's own hashed lines. New or changed technicians are still
+    saved as a secure hash; other lines are left exactly as they are.
+  - Reports go into the "reports" folder on the ITAD_DATA stick, the same
+    folder SwitchSeal uses.
+  - A separate ITAD_DATA stick is always used before the ITAD_DATA part of
+    the boot USB.
 
 v1.7.1
   - Reports are kept on a USB stick: the ITAD_DATA partition of the boot
@@ -134,7 +144,7 @@ try:
 except Exception:
     TZ = None
 
-VERSION = "1.7.1"
+VERSION = "1.7.2"
 TOOLS_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # --- THESE ARE THE FILES THIS GUI WILL RUN ---
@@ -306,6 +316,8 @@ STORE_NAMES = {
 
 def store_name():
     w = os.environ.get("ITAD_DATA_WHERE", "")
+    if w.startswith("ITAD_DATA_stick_"):
+        return "the ITAD_DATA stick (USB B)"
     if w.startswith("ITAD_DATA_on_"):
         return "the ITAD_DATA drive (%s)" % w[len("ITAD_DATA_on_"):]
     return STORE_NAMES.get(w, "")
@@ -361,7 +373,9 @@ def parse_tech_line(ln):
         name, rest = re.split(r",", ln, 1)[0], ""
     name = name.strip()
     rest = rest.strip()
-    return (name or None), (rest if rest.startswith("pbkdf2_sha256$") else "")
+    # LaptopSeal stores "pbkdf2_sha256$..." hashes; SwitchSeal stores the
+    # password itself ("Name:password"). Both are accepted for sign-in.
+    return (name or None), rest
 
 
 def load_accounts(out_dir):
@@ -390,6 +404,10 @@ def hash_password(password, salt=None, iterations=PBKDF_ITER):
 
 
 def verify_password(password, stored):
+    if stored and not stored.startswith("pbkdf2_sha256$"):
+        # SwitchSeal-style line (password as written in technicians.txt)
+        return hmac.compare_digest(stored.encode("utf-8"),
+                                   password.encode("utf-8"))
     try:
         algo, it, salt, want = stored.split("$")
         if algo != "pbkdf2_sha256":
@@ -2807,7 +2825,10 @@ class App:
             try:
                 path = save_account(self.out_dir, name, p1)
             except Exception as e:
-                msg.configure(text="Could not save: %s" % e, fg=BAD)
+                why = ("the USB stick gave a write error - check it in "
+                       "Windows (or use another stick) and restart"
+                       if getattr(e, "errno", None) == 5 else str(e))
+                msg.configure(text="Could not save: %s" % why, fg=BAD)
                 return
             for k in v:
                 v[k].set("")
@@ -4719,6 +4740,15 @@ class App:
             "Saved TXT + PDF" if has_pdf else (
                 "Saved (no PDF)" if saved else "Not saved"))
 
+    def report_dir(self):
+        """reports folder on the stick (same as SwitchSeal)."""
+        d = os.path.join(self.out_dir, "reports")
+        try:
+            os.makedirs(d, exist_ok=True)
+            return d
+        except Exception:
+            return self.out_dir
+
     def save_reports(self, rep):
         # The date and time in the name keeps an earlier report of the
         # same laptop (a re-test) instead of writing over it.
@@ -4727,10 +4757,11 @@ class App:
                       else rep["asset_id"]),
             now().strftime("%Y%m%d-%H%M%S"))
         obs = rep["observations"]
+        rdir = self.report_dir()
         copied = []
         for n, src in enumerate(obs.get("photos") or [], start=1):
             ext = os.path.splitext(src)[1].lower() or ".jpg"
-            dst = os.path.join(self.out_dir, "%s_photo%d%s" % (base, n, ext))
+            dst = os.path.join(rdir, "%s_photo%d%s" % (base, n, ext))
             try:
                 if os.path.realpath(src) != os.path.realpath(dst):
                     shutil.copyfile(src, dst)
@@ -4747,7 +4778,7 @@ class App:
                         ("pdf", lambda p: write_pdf(p, rep)),
                         ("log", lambda p: open(p, "w").write(
                             "\n".join(self.log) + "\n"))):
-            path = os.path.join(self.out_dir, "%s.%s" % (base, ext))
+            path = os.path.join(rdir, "%s.%s" % (base, ext))
             try:
                 fn(path)
                 saved.append(path)
