@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-laptop_wipe.py - ITAD data destruction (v1.0.3)
+laptop_wipe.py - ITAD data destruction (v1.0.4)
 
 DESTRUCTIVE. Wipes internal drives. Never touches USB / external drives
 or the drive the running OS is booted from.
@@ -8,6 +8,18 @@ or the drive the running OS is booted from.
 Step 3 of the ITAD pipeline. Runs AFTER laptop_check.py reports CLEAR
 and BEFORE laptop_test.py.
 
+v1.0.4: works on more laptop types:
+  - eMMC storage (cheap laptops, Chromebooks, some tablets) is now wiped:
+    secure erase / secure trim first (Purge), then normal discard.
+    The small mmcblkXbootN / mmcblkXrpmb areas are skipped (they are
+    firmware areas, not user data).
+  - SSDs are found by the "non-rotating" flag from the kernel, not only
+    by "SSD" in the model name (many SATA SSDs, e.g. "SAMSUNG MZ7..."
+    have no "SSD" in the name).
+  - FROZEN SATA drives (very common on Dell / HP / Lenovo): the laptop is
+    put to sleep for a few seconds and woken again, which unfreezes
+    most drives, then ATA Secure Erase is tried again. If the laptop does
+    not wake by itself, press the power button once.
 v1.0.3: updated default JSON path to match itad_run.py out-dir.
 v1.0.2: bug fixes over v1.0.1 (no change to wipe policy):
   - Works when booted from the Debian live USB: the OS / boot disk is
@@ -85,7 +97,7 @@ try:
 except Exception:
     NOW = datetime.now()
 
-VERSION = "1.0.3"
+VERSION = "1.0.4"
 ALL_METHODS = ["auto", "clear", "random", "dod", "purge", "crypto", "discard"]
 
 BAD_SERIALS = {
@@ -466,7 +478,7 @@ def _protected_disks():
 
 def scan_disks():
     rc, out, _ = run(["lsblk", "-J", "-b", "-o",
-                      "NAME,PATH,TYPE,FSTYPE,SIZE,RM,TRAN,MODEL,SERIAL"])
+                      "NAME,PATH,TYPE,FSTYPE,SIZE,RM,ROTA,TRAN,MODEL,SERIAL"])
     if rc != 0:
         return [], ["lsblk failed"]
     try:
@@ -480,7 +492,10 @@ def scan_disks():
         if d.get("type") != "disk":
             continue
         name = d.get("name") or ""
-        if name.startswith(("loop", "sr", "zram", "ram", "dm-")):
+        if name.startswith(("loop", "sr", "zram", "ram", "dm-", "md", "nbd")):
+            continue
+        # eMMC firmware areas (not user data, cannot be wiped normally)
+        if re.match(r"^mmcblk\d+(boot\d+|rpmb)$", name):
             continue
         if d.get("path") in protected:
             continue
@@ -490,6 +505,10 @@ def scan_disks():
             if int(d.get("size") or 0) < 32_000_000_000:
                 continue
         serial = (d.get("serial") or "").strip()
+        if not serial and name.startswith("mmcblk"):
+            serial = read_sysfs("/sys/block/%s/device/serial" % name)
+        if name.startswith("mmcblk"):
+            tran = tran or "mmc"
         disks.append({
             "path": d.get("path"),
             "name": name,
@@ -498,9 +517,37 @@ def scan_disks():
             "size_gb": round(int(d.get("size") or 0) / 1e9, 1),
             "tran": tran,
             "rm": rm,
+            "rota": _truthy(d.get("rota")),
             "fstype": (d.get("fstype") or "").lower(),
         })
     return disks, []
+
+
+def read_sysfs(path):
+    try:
+        with open(path) as f:
+            return f.read().strip()
+    except Exception:
+        return ""
+
+
+def _is_emmc(disk):
+    return (os.path.basename(disk.get("path") or "").startswith("mmcblk")
+            or disk.get("tran") == "mmc")
+
+
+def _is_nvme(disk):
+    return ("nvme" in (disk.get("path") or "")) or disk.get("tran") == "nvme"
+
+
+def _is_ssd(disk):
+    """Flash drive (SSD / NVMe / eMMC). Uses the kernel's rotating flag,
+    with the model name as a backup."""
+    if _is_nvme(disk) or _is_emmc(disk):
+        return True
+    if disk.get("rota") is False:
+        return True
+    return "ssd" in (disk.get("model") or "").lower()
 
 
 def disk_size(dev):
@@ -687,6 +734,18 @@ def _wipe_dod(dev, on_progress):
             "achieved": "dod" if rc == 0 else "fail"}
 
 
+def _wipe_emmc_secure(dev, on_progress):
+    """eMMC secure erase / secure trim (Purge). blkdiscard --secure asks
+    the eMMC to physically erase the blocks, not just mark them free."""
+    if not shutil.which("blkdiscard"):
+        return {"rc": 1, "note": "blkdiscard not installed", "achieved": "fail"}
+    progress_line("eMMC", 0.1, "secure erase running")
+    rc, out, err = run(["blkdiscard", "-v", "--secure", dev], timeout=3600)
+    clear_progress()
+    return {"rc": rc, "note": (err or out).strip()[:200] or "eMMC secure erase",
+            "achieved": "purge" if rc == 0 else "fail"}
+
+
 def _wipe_discard(dev, on_progress):
     if not shutil.which("blkdiscard"):
         return {"rc": 1, "note": "blkdiscard not installed", "achieved": "fail"}
@@ -844,6 +903,31 @@ def _ata_security_info(ident):
     return info
 
 
+_UNFROZEN_TRIED = {"done": False}
+
+
+def _try_unfreeze():
+    """Many laptop BIOSes (Dell, HP, Lenovo...) 'freeze' SATA drives at
+    power-on so Secure Erase cannot run. A short sleep + wake usually
+    unfreezes them. Only tried once per run."""
+    if _UNFROZEN_TRIED["done"]:
+        return "unfreeze already tried"
+    _UNFROZEN_TRIED["done"] = True
+    if not shutil.which("rtcwake"):
+        return "rtcwake not installed"
+    states = read_sysfs("/sys/power/state")
+    if "mem" not in states.split():
+        return "sleep not supported on this laptop"
+    print("    " + paint("Drive is FROZEN — putting the laptop to sleep for "
+                         "8 seconds to unfreeze it. If it does not wake by "
+                         "itself, press the power button once.", "yellow"))
+    sys.stdout.flush()
+    os.sync()
+    run(["rtcwake", "-m", "mem", "-s", "8"], timeout=180)
+    time.sleep(5)          # let the drives come back after waking
+    return "sleep/wake done"
+
+
 def _ata_secure_erase(dev):
     if not shutil.which("hdparm"):
         return {"rc": 1, "note": "hdparm not installed",
@@ -855,6 +939,11 @@ def _ata_secure_erase(dev):
     if not info["supported"]:
         return {"rc": 1, "note": "Security: not supported",
                 "achieved": "fail"}
+    if info["frozen"]:
+        unfreeze_note = _try_unfreeze()
+        rc, ident, _ = run(["hdparm", "-I", dev])
+        if rc == 0:
+            info = _ata_security_info(ident)
     if info["frozen"]:
         return {"rc": 1,
                 "note": "Security state is FROZEN — power-cycle the "
@@ -887,8 +976,17 @@ def _ata_secure_erase(dev):
 def _wipe_purge(disk, on_progress):
     """Try the strongest available Purge method, fall back within Purge."""
     dev = disk["path"]
-    is_nvme = ("nvme" in dev) or (disk.get("tran") == "nvme")
-    is_ssd = "ssd" in (disk.get("model") or "").lower() or is_nvme
+    is_nvme = _is_nvme(disk)
+    is_ssd = _is_ssd(disk)
+
+    if _is_emmc(disk):
+        r = _wipe_emmc_secure(dev, on_progress)
+        if r["achieved"] == "purge":
+            return r
+        r = _wipe_discard(dev, on_progress)
+        if r["achieved"] == "discard":
+            return r
+        return {"rc": 1, "note": "eMMC erase not supported", "achieved": "fail"}
 
     if is_nvme:
         r = _nvme_sanitize(dev, on_progress)
@@ -899,7 +997,7 @@ def _wipe_purge(disk, on_progress):
             r["achieved"] = "purge-format"
             return r
 
-    if not is_nvme:
+    if not is_nvme and disk.get("tran") in ("sata", "ata", ""):
         r = _ata_secure_erase(dev)
         if r["achieved"] == "purge":
             return r
@@ -915,7 +1013,7 @@ def _wipe_purge(disk, on_progress):
 def _wipe_crypto(disk, on_progress):
     """Crypto erase only. Supported here for NVMe drives."""
     dev = disk["path"]
-    is_nvme = ("nvme" in dev) or (disk.get("tran") == "nvme")
+    is_nvme = _is_nvme(disk)
     if not is_nvme:
         return {"rc": 1,
                 "note": "crypto erase is only supported here for NVMe "
