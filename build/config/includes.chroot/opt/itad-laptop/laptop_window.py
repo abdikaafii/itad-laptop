@@ -1,7 +1,22 @@
 #!/usr/bin/env python3
 """
-laptop_window.py - ITAD Laptop window (v1.5.0)
+laptop_window.py - ITAD Laptop window (v1.5.1)
 This is the GRAPHICAL USER INTERFACE (GUI).
+
+v1.5.1
+  - Sound: the sound chip is set up properly before the speaker and
+    microphone tests (alsactl init, every speaker / headphone / master
+    control turned up and unmuted, auto-mute off, recording switched on
+    with the internal microphone selected).
+  - Microphone: records from each recording device once (it used to open
+    the same device twice at the same time, which fails) and plays the
+    recording back through the laptop's own speakers, not HDMI.
+  - Speakers / microphone windows show the sound card used and any error,
+    so a missing driver can be seen straight away.
+  - Pop-up windows (change result, speakers, webcam, USB) always open in
+    front of the main window. Before, they could open behind it, so the
+    PASS / FAIL buttons could not be reached.
+  - Test buttons in rows of three, so no text is cut off.
 
 v1.5.0
   - New automatic tests: Ethernet (cable link + speed) and Bluetooth
@@ -82,7 +97,7 @@ try:
 except Exception:
     TZ = None
 
-VERSION = "1.5.0"
+VERSION = "1.5.1"
 TOOLS_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # --- THESE ARE THE FILES THIS GUI WILL RUN ---
@@ -371,24 +386,86 @@ def run_cmd(cmd, timeout=15):
         return 1, ""
 
 
-def unmute_audio():
-    """A fresh live boot often starts muted or at 0%. Turn the main
-    controls up and unmute them on every sound card before the tone."""
-    if not shutil.which("amixer"):
-        return
+def sound_cards():
+    """[(card_number, name)] from /proc/asound/cards."""
     try:
         with open("/proc/asound/cards") as f:
-            cards = re.findall(r"^\s*(\d+)\s*\[", f.read(), re.M)
+            return re.findall(r"^\s*(\d+)\s*\[.*?\]:\s*(.*)$", f.read(), re.M)
     except Exception:
-        cards = []
-    for c in cards or ["0"]:
-        for ctl in ("Master", "Speaker", "PCM", "Front"):
-            run_cmd(["amixer", "-q", "-c", c, "sset", ctl, "80%", "unmute"],
-                    timeout=5)
-        # microphone side: turn recording on and up
-        for ctl in ("Capture", "Internal Mic", "Mic"):
-            run_cmd(["amixer", "-q", "-c", c, "sset", ctl, "80%", "cap"],
-                    timeout=5)
+        return []
+
+
+def unmute_audio():
+    """A fresh live boot often starts muted or at 0%. Set every sound card
+    up: default levels (alsactl init), then every playback control up and
+    unmuted, auto-mute off, recording on with the internal mic chosen."""
+    if not shutil.which("amixer"):
+        return
+    if shutil.which("alsactl"):
+        run_cmd(["alsactl", "init"], timeout=10)
+    for card, _name in sound_cards() or [("0", "")]:
+        rc, out = run_cmd(["amixer", "-c", card, "scontents"], timeout=8)
+        blocks = re.split(r"^Simple mixer control ", out or "", flags=re.M)
+        for blk in blocks:
+            m = re.match(r"'(.+?)',(\d+)", blk)
+            if not m:
+                continue
+            name = m.group(1)
+            ctl = "%s,%s" % (name, m.group(2))
+            caps = re.search(r"Capabilities:(.*)", blk)
+            caps = caps.group(1) if caps else ""
+            low = name.lower()
+            if low == "auto-mute mode":
+                run_cmd(["amixer", "-q", "-c", card, "sset", ctl,
+                         "Disabled"], timeout=5)
+                continue
+            tok = caps.split()
+            has = lambda *names: any(t in names for t in tok)
+            boost = "boost" in low
+            pvol = has("pvolume", "pvolume-joined") or (
+                has("volume", "volume-joined") and not boost)
+            psw = has("pswitch", "pswitch-joined", "switch", "switch-joined")
+            if pvol:
+                level = "90%" if any(k in low for k in (
+                    "master", "speaker", "headphone", "pcm", "front",
+                    "bass")) else "70%"
+                run_cmd(["amixer", "-q", "-c", card, "sset", ctl, level],
+                        timeout=5)
+            if psw:
+                run_cmd(["amixer", "-q", "-c", card, "sset", ctl, "unmute"],
+                        timeout=5)
+            if boost and has("volume", "volume-joined"):
+                run_cmd(["amixer", "-q", "-c", card, "sset", ctl, "40%"],
+                        timeout=5)
+            if "cvolume" in caps or "cswitch" in caps:
+                lvl = "40%" if "boost" in low else "80%"
+                if "cvolume" in caps:
+                    run_cmd(["amixer", "-q", "-c", card, "sset", ctl, lvl],
+                            timeout=5)
+                if "cswitch" in caps:
+                    run_cmd(["amixer", "-q", "-c", card, "sset", ctl, "cap"],
+                            timeout=5)
+            if low in ("capture source", "input source") and \
+                    "enum" in caps:
+                for choice in ("Internal Mic", "Mic", "Front Mic"):
+                    rc2, _ = run_cmd(["amixer", "-q", "-c", card, "sset",
+                                      ctl, choice], timeout=5)
+                    if rc2 == 0:
+                        break
+
+
+def audio_problem():
+    """Short reason when there is no usable sound card ('' if fine)."""
+    cards = sound_cards()
+    if not cards:
+        return ("No sound card found - the sound driver or firmware did "
+                "not load on this laptop")
+    names = " ".join(n for _c, n in cards).lower()
+    if all(("hdmi" in n.lower() or "displayport" in n.lower())
+           for _c, n in cards):
+        return "Only HDMI sound found - the laptop's own sound chip did " \
+               "not load (driver / firmware)"
+    return ""
 
 
 def speaker_device():
@@ -453,12 +530,18 @@ def find_touchpad():
 
 
 def capture_devices():
-    """Recording devices to try: the default first, then each card."""
-    devs = ["default"]
+    """Recording devices to try: each real recording device once
+    (opening the same device twice at the same time fails)."""
+    devs = []
     rc, out = run_cmd(["arecord", "-l"], timeout=5)
-    for card, dev in re.findall(r"card (\d+):.*?device (\d+):", out or ""):
-        devs.append("plughw:%s,%s" % (card, dev))
-    return devs
+    for ln in (out or "").splitlines():
+        m = re.match(r"card (\d+):.*?device (\d+):\s*(.*)", ln)
+        if not m or re.search(r"hdmi|displayport", m.group(3), re.I):
+            continue
+        d = "plughw:%s,%s" % (m.group(1), m.group(2))
+        if d not in devs:
+            devs.append(d)
+    return devs or ["default"]
 
 
 def wav_level(path):
@@ -2750,9 +2833,9 @@ class App:
                  ("USB", self.manual_usb))
         for n, (comp, fn) in enumerate(tests):
             label = "USB ports test" if comp == "USB" else comp + " test"
-            b = self.btn(mrow, label, fn, "ghost", width=190)
+            b = self.btn(mrow, label, fn, "ghost", width=185)
             b.configure(state="disabled")
-            b.grid(row=n // 4, column=n % 4, sticky="w",
+            b.grid(row=n // 3, column=n % 3, sticky="w",
                    padx=(0, self.px(8)), pady=(0, self.px(8)))
             self.manual_btns[comp] = b
         left, right, mid = self.bar(pg)
@@ -2976,6 +3059,20 @@ class App:
                         .get("status") == NOT_FITTED else "normal")
         self.w_next.configure(state="normal")
 
+    def popup(self, win):
+        """Make sure a pop-up window is in front of the full-screen main
+        window and has the keyboard, so its buttons can be used."""
+        try:
+            win.transient(self.root)
+        except Exception:
+            pass
+        try:
+            win.attributes("-topmost", True)
+        except Exception:
+            pass
+        win.lift()
+        win.after(150, lambda: (win.lift(), win.focus_force()))
+
     def result_detail(self, r):
         """Short extra text next to a result (battery health %)."""
         if r.get("component") == "Battery":
@@ -3001,7 +3098,6 @@ class App:
         win = tk.Toplevel(self.root)
         win.title("Change result")
         win.configure(bg=NAVY)
-        win.transient(self.root)
         sw, sh = win.winfo_screenwidth(), win.winfo_screenheight()
         w, h = self.px(560), self.px(330)
         win.geometry("%dx%d+%d+%d" % (w, h, (sw - w) // 2, (sh - h) // 2))
@@ -3044,7 +3140,7 @@ class App:
                  "outline").pack(side="left", padx=4)
         self.btn(bf, "Cancel", win.destroy, "ghost").pack(side="left",
                                                           padx=4)
-        win.grab_set()
+        self.popup(win)
         e.focus_set()
 
     def test_summary(self):
@@ -3227,6 +3323,7 @@ class App:
         tk = self.tk
         win = tk.Toplevel(self.root)
         win.title("Speakers test")
+        self.popup(win)
         win.configure(bg=NAVY)
         sw, sh = win.winfo_screenwidth(), win.winfo_screenheight()
         w, h = min(self.px(760), sw), min(self.px(470), sh)
@@ -3236,15 +3333,16 @@ class App:
                       "or \"Front right\".\nListen: is it clear, from the "
                       "right side, with no crackling?", 10, fg=MUTED,
                  justify="center").pack()
+        unmute_audio()
         dev = speaker_device()
-        info = self.lbl(win, "Output: %s" % (dev[1] if dev else
-                                            "default sound card"),
-                        10, fg=MUTED)
+        prob = audio_problem()
+        info = self.lbl(win, prob or ("Output: %s" % (
+            dev[1] if dev else "default sound card")), 10,
+            fg=BAD if prob else MUTED, wraplength=w - 40)
         info.pack(pady=(self.px(6), 0))
         now_l = self.lbl(win, "", 14, True, fg=CYAN)
         now_l.pack(pady=self.px(10))
-        st = {"busy": False, "played": set(), "proc": None}
-        unmute_audio()
+        st = {"busy": False, "played": set(), "proc": None, "err": ""}
 
         def play(which):
             if st["busy"]:
@@ -3266,17 +3364,26 @@ class App:
                     cmd += ["-t", "sine", "-f", "440"]
                 else:
                     cmd += ["-t", "wav", "-s", which]
+                err = ""
                 try:
                     p = subprocess.Popen(cmd, stdout=subprocess.DEVNULL,
-                                         stderr=subprocess.DEVNULL)
+                                         stderr=subprocess.PIPE, text=True)
                     st["proc"] = p
-                    p.wait(timeout=20)
-                except Exception:
-                    pass
+                    _o, e = p.communicate(timeout=20)
+                    if p.returncode not in (0, None):
+                        err = (e or "").strip().splitlines()
+                        err = err[-1] if err else "error %s" % p.returncode
+                except Exception as ex:
+                    err = str(ex)
                 st["played"].add(which)
                 st["busy"] = False
-                self.q.put(lambda: now_l.configure(
-                    text="Done - did it sound right?", fg=TEXT))
+                st["err"] = err
+                if err:
+                    self.q.put(lambda: now_l.configure(
+                        text="Sound error: %s" % err[:90], fg=BAD))
+                else:
+                    self.q.put(lambda: now_l.configure(
+                        text="Done - did it sound right?", fg=TEXT))
             threading.Thread(target=work, daemon=True).start()
 
         pf = tk.Frame(win, bg=NAVY)
@@ -3300,9 +3407,14 @@ class App:
             win.destroy()
             played = sorted({"1": "left", "2": "right",
                              "both": "both"}[x] for x in st["played"])
+            extra = []
+            if st.get("err"):
+                extra.append("Sound error: %s" % st["err"][:100])
+            if prob:
+                extra.append(prob)
             self.finish_manual("Speakers", status, [
                 note + (" (played: %s)" % ", ".join(played)
-                        if played else " (nothing played)")])
+                        if played else " (nothing played)")] + extra)
 
         self.btn(bf, "Both work", lambda: close(
             "PASS", "Left and right speakers clear")).pack(side="left",
@@ -3354,6 +3466,7 @@ class App:
         tk = self.tk
         win = tk.Toplevel(self.root)
         win.title("Webcam test")
+        self.popup(win)
         win.configure(bg=NAVY)
         sw, sh = win.winfo_screenwidth(), win.winfo_screenheight()
         w, h = min(self.px(820), sw), min(self.px(680), sh)
@@ -3494,6 +3607,7 @@ class App:
         tk = self.tk
         win = tk.Toplevel(self.root)
         win.title("USB ports test")
+        self.popup(win)
         win.configure(bg=NAVY)
         sw, sh = win.winfo_screenwidth(), win.winfo_screenheight()
         w, h = min(self.px(820), sw), min(self.px(600), sh)
@@ -3779,8 +3893,11 @@ class App:
             if best >= 0.03 and shutil.which("aplay"):
                 self.q.put(lambda: self.t_status.configure(
                     text="Playing the recording back...", fg=CYAN))
+                spk = speaker_device()
+                cmd = ["aplay", "-q"] + (["-D", spk[0]] if spk else []) + \
+                    [best_path]
                 try:
-                    subprocess.call(["aplay", "-q", best_path], timeout=10,
+                    subprocess.call(cmd, timeout=10,
                                     stdout=subprocess.DEVNULL,
                                     stderr=subprocess.DEVNULL)
                 except Exception:
@@ -3796,10 +3913,15 @@ class App:
             self.t_status.configure(text="", fg=TEXT)
             pct = int(round(level * 100))
             if level < 0.03:
+                prob = audio_problem()
                 self.finish_manual("Microphone", "FAIL",
-                                   ["No sound picked up (level %d%%)" % pct])
+                                   ["No sound picked up (level %d%%)%s" % (
+                                       pct, (" - " + prob) if prob else "")])
                 self.mb.showwarning("Microphone", "The microphone picked "
-                                    "up no sound (level %d%%)." % pct)
+                                    "up no sound (level %d%%).%s" % (
+                                        pct, ("\n\n" + prob) if prob
+                                        else "\n\nDevices tried: " +
+                                        ", ".join(capture_devices())))
                 return
             if self.mb.askyesno("Microphone", "Sound level %d%%.\n\nDid you "
                                 "hear your recording clearly?" % pct):

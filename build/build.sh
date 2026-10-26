@@ -54,7 +54,7 @@ printf '%s\n' plymouth plymouth-themes xorg xinit openbox xterm python3 \
   python3-tk python3-reportlab python3-pil sudo util-linux x11-xserver-utils \
   ntfs-3g alsa-utils network-manager smartmontools dmidecode hdparm \
   nvme-cli pciutils usbutils lshw iw rfkill parted fonts-dejavu-core zstd \
-  bluez python3-cryptography ffmpeg v4l-utils \
+  bluez python3-cryptography ffmpeg v4l-utils firmware-sof-signed alsa-ucm-conf \
   > "$CFG/package-lists/itad.list.chroot"
 
 # NICE-TO-HAVE packages: installed one by one by a hook (step 4).
