@@ -4,6 +4,8 @@ laptop_window.py - ITAD Laptop window (v1.7.2)
 This is the GRAPHICAL USER INTERFACE (GUI).
 
 v1.7.2
+  - Sign in: technician NAME is a drop-down list of the names in
+    technicians.txt (like SwitchSeal), then the password.
   - Same technician logins as SwitchSeal: technicians.txt on the
     ITAD_DATA stick (USB B) with lines "Name:password" is read as well as
     LaptopSeal's own hashed lines. New or changed technicians are still
@@ -2674,13 +2676,16 @@ class App:
         ht = tk.Frame(head, bg=NAVY)
         ht.pack(side="left")
         self.lbl(ht, "Technician sign in", 20, True).pack(anchor="w")
-        self.lbl(ht, "Sign in with your own name and password.", 10,
+        self.lbl(ht, "Choose your name, then type your password.", 10,
                  fg=MUTED).pack(anchor="w")
         tk.Frame(inner, bg=NAVY, height=self.px(18)).pack()
-        self.lbl(inner, "NAME", 9, True, fg=MUTED).pack(anchor="w")
-        self.l_user = self.entry(inner, self.v_user)
-        self.l_user.configure(width=32)
+        self.lbl(inner, "TECHNICIAN", 9, True, fg=MUTED).pack(anchor="w")
+        self.l_user = self.ttk.Combobox(inner, textvariable=self.v_user,
+                                        state="readonly", width=30,
+                                        font=self.F(13))
         self.l_user.pack(fill="x", pady=(2, self.px(12)), ipady=self.px(6))
+        self.l_user.bind("<<ComboboxSelected>>",
+                         lambda e: self.l_pass.focus_set())
         self.lbl(inner, "PASSWORD", 9, True, fg=MUTED).pack(anchor="w")
         self.l_pass = self.entry(inner, self.v_pass, secret=True)
         self.l_pass.pack(fill="x", pady=(2, self.px(6)), ipady=self.px(6))
@@ -2702,6 +2707,10 @@ class App:
         self.v_pass.set("")
         acc = load_accounts(self.out_dir)
         ready = [a for a in acc.values() if a["hash"]]
+        names = sorted((a["name"] for a in ready), key=str.lower)
+        self.l_user.configure(values=names)
+        if self.v_user.get() not in names:
+            self.v_user.set(names[0] if len(names) == 1 else "")
         if not ready:
             self.l_msg.configure(
                 text="No technician accounts yet. Press 'Add technician' "
@@ -2713,7 +2722,8 @@ class App:
             "No ITAD_DATA stick: new accounts and reports are lost at "
             "power off.", fg=WARN)
         self.show("login")
-        self.root.after(200, self.l_user.focus_set)
+        self.root.after(200, (self.l_pass.focus_set if self.v_user.get()
+                              else self.l_user.focus_set))
 
     def do_login(self):
         left = self.locked_until - time.time()
@@ -2724,7 +2734,8 @@ class App:
         name = self.v_user.get().strip()
         pw = self.v_pass.get()
         if not name or not pw:
-            self.l_msg.configure(text="Type your name and password.", fg=WARN)
+            self.l_msg.configure(text="Choose your name and type your "
+                                      "password.", fg=WARN)
             return
         acc = load_accounts(self.out_dir).get(name.lower())
         if acc and acc["hash"] and verify_password(pw, acc["hash"]):
