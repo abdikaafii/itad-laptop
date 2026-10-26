@@ -1,7 +1,19 @@
 #!/usr/bin/env python3
 """
-laptop_window.py - ITAD Laptop window (v1.5.1)
+laptop_window.py - ITAD Laptop window (v1.6.0)
 This is the GRAPHICAL USER INTERFACE (GUI).
+
+v1.6.0
+  - FIX: the USB ports and Speakers windows stopped right after their
+    title (text helper did not accept centred text). Both work again.
+  - FIX: webcam picture "couldn't recognize image data": frames are now
+    sent as PNG, which the window can always show.
+  - USB ports test redesigned: it finds how many outside USB ports this
+    laptop model has (from the laptop's own firmware tables) and shows one
+    row per port. Each port turns green with a beep when a device is
+    plugged in. "Ports on this laptop" can be changed with - / +.
+    Shows "Tested 2 of 3". A comment box (e.g. "left port not
+    recognising"). Finish = PASS only when every port was tested.
 
 v1.5.1
   - Sound: the sound chip is set up properly before the speaker and
@@ -97,7 +109,7 @@ try:
 except Exception:
     TZ = None
 
-VERSION = "1.5.1"
+VERSION = "1.6.0"
 TOOLS_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # --- THESE ARE THE FILES THIS GUI WILL RUN ---
@@ -490,6 +502,70 @@ def speaker_device():
             continue
         return ("plughw:%s,%s" % (m.group(1), m.group(3)), name)
     return None
+
+
+def usb_connectors():
+    """Physical USB connectors of this laptop, from the firmware (ACPI)
+    port tables. A USB-A port has a USB 2 and a USB 3 side ("peer"); they
+    are joined into one connector. external = a port the user can reach
+    (connect_type "hotplug"). Returns [] if the laptop reports nothing."""
+    ports = {}
+    for pd in glob.glob("/sys/bus/usb/devices/usb*/*-0:1.0/usb*-port*"):
+        m = re.match(r"usb(\d+)-port(\d+)$", os.path.basename(pd))
+        if not m:
+            continue
+        try:
+            with open(pd + "/connect_type") as f:
+                ct = f.read().strip()
+        except Exception:
+            ct = ""
+        ports[os.path.realpath(pd)] = ("%s-%s" % (m.group(1), m.group(2)),
+                                       ct)
+    conns, seen = [], set()
+    for real, (pname, ct) in sorted(ports.items(), key=lambda x: x[1][0]):
+        if real in seen:
+            continue
+        grp = {real}
+        peer = os.path.join(real, "peer")
+        if os.path.exists(peer):
+            grp.add(os.path.realpath(peer))
+        seen |= grp
+        names = {ports[g][0] for g in grp if g in ports}
+        types = {ports[g][1] for g in grp if g in ports}
+        if "not used" in types and len(types) == 1:
+            continue
+        conns.append({"id": min(names), "ports": names,
+                      "external": "hotplug" in types})
+    return conns
+
+
+_BEEP = "/tmp/itad_beep.wav"
+
+
+def play_beep():
+    """Short 'ding' through the laptop speakers."""
+    try:
+        if not os.path.exists(_BEEP):
+            import struct
+            import wave
+            rate = 22050
+            with wave.open(_BEEP, "wb") as w:
+                w.setnchannels(1)
+                w.setsampwidth(2)
+                w.setframerate(rate)
+                frames = []
+                for i in range(int(rate * 0.18)):
+                    env = 1.0 - i / (rate * 0.18)
+                    frames.append(struct.pack("<h", int(
+                        12000 * env * math.sin(2 * math.pi * 1320 * i /
+                                               rate))))
+                w.writeframes(b"".join(frames))
+        dev = speaker_device()
+        subprocess.call(["aplay", "-q"] + (["-D", dev[0]] if dev else []) +
+                        [_BEEP], timeout=5, stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL)
+    except Exception:
+        pass
 
 
 def find_touchscreen():
@@ -1689,9 +1765,10 @@ class App:
     def lbl(self, parent, text="", size=11, bold=False, fg=TEXT, bg=None, **kw):
         if "wraplength" in kw:
             kw["wraplength"] = self.px(kw["wraplength"])
+        kw.setdefault("anchor", "w")
+        kw.setdefault("justify", "left")
         return self.tk.Label(parent, text=text, font=self.F(size, bold), fg=fg,
-                             bg=bg if bg else NAVY, anchor="w", justify="left",
-                             **kw)
+                             bg=bg if bg else NAVY, **kw)
 
     def btn(self, parent, text, cmd, kind="primary", width=None):
         # kind: primary / ghost / danger / outline
@@ -3505,19 +3582,23 @@ class App:
                     out.append((dev, name))
             return out
 
-        def read_ppm(fh):
-            tokens = []
-            while len(tokens) < 4:
-                ln = fh.readline()
-                if not ln:
-                    return None
-                tokens += ln.split(b"#")[0].split()
-            fw, fh_ = int(tokens[1]), int(tokens[2])
-            size = fw * fh_ * 3
-            data = fh.read(size)
-            if len(data) < size:
+        def read_png(fh):
+            """One PNG picture from the ffmpeg stream (up to IEND)."""
+            sig = fh.read(8)
+            if len(sig) < 8 or sig != b"\x89PNG\r\n\x1a\n":
                 return None
-            return b"P6\n%d %d\n255\n" % (fw, fh_) + data
+            out = [sig]
+            while True:
+                head = fh.read(8)
+                if len(head) < 8:
+                    return None
+                ln = int.from_bytes(head[:4], "big")
+                body = fh.read(ln + 4)
+                if len(body) < ln + 4:
+                    return None
+                out += [head, body]
+                if head[4:8] == b"IEND":
+                    return b"".join(out)
 
         def reader():
             devs = devices()
@@ -3534,15 +3615,16 @@ class App:
                 try:
                     proc = subprocess.Popen(
                         ["ffmpeg", "-loglevel", "error", "-f", "v4l2",
-                         "-i", dev, "-vf", "scale=640:-2", "-r", "12",
-                         "-f", "image2pipe", "-vcodec", "ppm", "-"],
+                         "-i", dev, "-vf", "scale=640:-2", "-r", "10",
+                         "-f", "image2pipe", "-vcodec", "png",
+                         "-compression_level", "1", "-"],
                         stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
                 except Exception as ex:
                     cam["error"] = "Camera could not start: %s" % ex
                     continue
                 cam["proc"] = proc
                 while not cam["stop"]:
-                    fr = read_ppm(proc.stdout)
+                    fr = read_png(proc.stdout)
                     if fr is None:
                         break
                     cam["frame"] = fr
@@ -3564,7 +3646,7 @@ class App:
                 cam["frame"] = None
                 try:
                     img = tk.PhotoImage(data=base64.b64encode(fr),
-                                        format="PPM")
+                                        format="png")
                     pic.configure(image=img, text="", width=img.width(),
                                   height=img.height())
                     cam["img"] = img
@@ -3610,21 +3692,47 @@ class App:
         self.popup(win)
         win.configure(bg=NAVY)
         sw, sh = win.winfo_screenwidth(), win.winfo_screenheight()
-        w, h = min(self.px(820), sw), min(self.px(600), sh)
+        w, h = min(self.px(860), sw), min(self.px(640), sh)
         win.geometry("%dx%d+%d+%d" % (w, h, (sw - w) // 2, (sh - h) // 2))
-        self.lbl(win, "USB ports test", 16, True).pack(pady=(self.px(12), 2))
-        self.lbl(win, "Plug a USB stick (or mouse) into EVERY USB port, one "
-                      "after another, USB-C too.\nEach port is listed below "
-                      "as soon as it works. The port with the boot USB "
-                      "already works.", 10, fg=MUTED,
+        self.lbl(win, "USB ports test", 16, True, anchor="center").pack(
+            pady=(self.px(10), 2))
+        self.lbl(win, "Plug a USB stick or mouse into EVERY outside USB port "
+                      "(USB-C too), one after another.\nEach port turns "
+                      "green with a beep. The port with the boot USB is "
+                      "already OK.", 10, fg=MUTED, anchor="center",
                  justify="center").pack()
-        count = self.lbl(win, "Ports found: 0", 14, True, fg=CYAN)
-        count.pack(pady=(self.px(12), self.px(6)))
-        lst = self.lbl(win, "Waiting for a device...", 11, fg=TEXT,
-                       justify="left", wraplength=w - 60)
-        lst.pack(fill="both", expand=True, padx=30)
+
+        conns = usb_connectors()          # [{id, ports:set, external}]
+        ext = [c for c in conns if c["external"]]
+        known = bool(ext)
+        top = tk.Frame(win, bg=NAVY)
+        top.pack(pady=(self.px(10), 0))
+        self.lbl(top, "Ports on this laptop:", 11, True).pack(side="left")
+        v_need = tk.IntVar(value=len(ext) if known else 3)
+        tk.Spinbox(top, from_=1, to=12, width=3, textvariable=v_need,
+                   font=self.F(13, True), justify="center").pack(
+            side="left", padx=8)
+        self.lbl(top, "(found from the laptop)" if known else
+                 "(not reported by this laptop - set it)", 9,
+                 fg=MUTED).pack(side="left")
+        count = self.lbl(win, "", 15, True, fg=CYAN, anchor="center")
+        count.pack(pady=(self.px(8), self.px(4)))
+        rows_f = tk.Frame(win, bg=NAVY)
+        rows_f.pack(fill="x", padx=self.px(40))
+        self.lbl(win, "Comment (optional, e.g. \"left port not "
+                      "recognising\"):", 9, fg=MUTED).pack(
+            anchor="w", padx=self.px(40), pady=(self.px(10), 0))
+        v_note = tk.StringVar(value="")
+        self.entry(win, v_note).pack(fill="x", padx=self.px(40), ipady=3)
         bf = tk.Frame(win, bg=NAVY)
         bf.pack(side="bottom", pady=self.px(12))
+
+        # port name (e.g. "1-3") -> connector index
+        port_to = {}
+        for i, c in enumerate(conns):
+            for pname in c["ports"]:
+                port_to[pname] = i
+        st = {"ok": {}, "stop": False, "rows": {}, "extra": 0}
 
         def rd(path):
             try:
@@ -3633,7 +3741,7 @@ class App:
             except Exception:
                 return ""
 
-        def snapshot():
+        def devices():
             out = {}
             for p in glob.glob("/sys/bus/usb/devices/*"):
                 n = os.path.basename(p)
@@ -3642,57 +3750,127 @@ class App:
                 out[n] = p
             return out
 
-        base = set(snapshot())
-        st = {"ports": {}, "stop": False}
-
         def speed_text(sp):
             try:
                 v = int(float(sp))
             except Exception:
                 return "USB"
-            if v >= 10000:
-                return "USB 3.2 (10 Gbps)"
-            if v >= 5000:
-                return "USB 3 (5 Gbps)"
-            if v >= 480:
-                return "USB 2"
-            return "USB 1"
+            return ("USB 3.2 (10 Gbps)" if v >= 10000 else
+                    "USB 3 (5 Gbps)" if v >= 5000 else
+                    "USB 2" if v >= 480 else "USB 1")
+
+        def key_for(devname):
+            top_port = devname.split(".")[0]          # "1-3.2" -> "1-3"
+            if top_port in port_to:
+                return port_to[top_port]
+            return "x" + top_port                      # unknown layout
+
+        def row(key, title):
+            if key in st["rows"]:
+                return st["rows"][key]
+            f = tk.Frame(rows_f, bg=CARD2, highlightbackground=BORDER,
+                         highlightthickness=1)
+            f.pack(fill="x", pady=2)
+            a_ = self.lbl(f, title, 11, True, bg=CARD2)
+            a_.pack(side="left", padx=10, pady=4)
+            b_ = self.lbl(f, "waiting - plug a device in", 10, fg=MUTED,
+                          bg=CARD2)
+            b_.pack(side="left", padx=10)
+            st["rows"][key] = b_
+            return b_
+
+        if known:
+            for n, i in enumerate(sorted(range(len(conns)),
+                                         key=lambda k: conns[k]["id"])):
+                if conns[i]["external"]:
+                    conns[i]["label"] = "Port %d" % (len(st["rows"]) + 1)
+                    row(i, conns[i]["label"])
+
+        def mark(key, text, first=False):
+            if key in st["ok"]:
+                return
+            st["ok"][key] = text
+            if isinstance(key, str) and key not in st["rows"]:
+                st["extra"] += 1
+                row(key, "Port %s" % key[1:])
+            st["rows"][key].configure(text="OK   " + text, fg=OK)
+            if not first:
+                beep()
+
+        def beep():
+            try:
+                self.root.bell()
+            except Exception:
+                pass
+            threading.Thread(target=play_beep, daemon=True).start()
+
+        def update_count():
+            need = max(1, int(v_need.get() or 1))
+            got = len(st["ok"])
+            count.configure(text="Tested %d of %d" % (min(got, need), need),
+                            fg=OK if got >= need else CYAN)
+
+        base = devices()
+        for n, p in base.items():            # already plugged in (boot USB)
+            k = key_for(n)
+            if known and not (isinstance(k, int) and conns[k]["external"]):
+                continue                     # built-in camera / bluetooth
+            if not known:
+                continue
+            mark(k, "already in use (%s)" % ((rd(p + "/product") or
+                                               "USB device")), first=True)
 
         def poll():
             if st["stop"]:
                 return
-            for n, p in snapshot().items():
+            for n, p in devices().items():
                 if n in base:
                     continue
-                port = n.split(".")[0]
-                if port in st["ports"]:
+                k = key_for(n)
+                if k in st["ok"]:
+                    continue
+                if isinstance(k, int) and not conns[k]["external"]:
+                    base[n] = p          # internal device (camera, BT...)
                     continue
                 prod = (rd(p + "/manufacturer") + " " +
                         rd(p + "/product")).strip() or "USB device"
-                st["ports"][port] = "Port %s  -  %s  -  %s" % (
-                    port, speed_text(rd(p + "/speed")), prod)
-            if st["ports"]:
-                count.configure(text="Ports found: %d" % len(st["ports"]),
-                                fg=OK)
-                lst.configure(text="\n".join(
-                    "OK   " + v for v in st["ports"].values()))
-            win.after(600, poll)
+                mark(k, "%s  -  %s" % (prod, speed_text(rd(p + "/speed"))))
+            update_count()
+            win.after(500, poll)
 
         def close(status, note):
             st["stop"] = True
+            need = max(1, int(v_need.get() or 1))
+            got = len(st["ok"])
             win.destroy()
-            ports = list(st["ports"].values())
-            notes = [note + " - %d port(s) seen working" % len(ports)]
-            notes += ports[:8]
+            notes = [note + " - %d of %d ports tested" % (min(got, need),
+                                                         need)]
+            c = v_note.get().strip()
+            if c:
+                notes.append("Comment: " + c)
+            notes += ["%s: %s" % (("Port %s" % k[1:]) if isinstance(k, str)
+                                  else conns[k].get("label", "Port"), v)
+                      for k, v in st["ok"].items()][:10]
             self.finish_manual("USB", status, notes)
 
-        self.btn(bf, "All ports work", lambda: close(
-            "PASS", "All USB ports checked")).pack(side="left", padx=4)
+        def finish():
+            need = max(1, int(v_need.get() or 1))
+            got = len(st["ok"])
+            if got >= need:
+                close("PASS", "All USB ports work")
+            elif self.mb.askyesno(
+                    "USB ports", "Only %d of %d ports were tested.\n\n"
+                    "Mark USB as FAIL (a port does not work)?" % (got, need),
+                    parent=win):
+                close("FAIL", "Not every USB port worked")
+
+        self.btn(bf, "Finish", finish).pack(side="left", padx=4)
         self.btn(bf, "A port does not work", lambda: close(
             "FAIL", "A USB port does not work"), "danger",
             width=240).pack(side="left", padx=4)
         win.protocol("WM_DELETE_WINDOW", lambda: close(
             "WARN", "USB test closed without a result"))
+        update_count()
         win.after(300, poll)
 
     def manual_touchpad(self):
