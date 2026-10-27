@@ -155,7 +155,7 @@ try:
 except Exception:
     TZ = None
 
-VERSION = "1.9.0"
+VERSION = "1.9.1"
 TOOLS_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # --- THESE ARE THE FILES THIS GUI WILL RUN ---
@@ -1845,6 +1845,15 @@ def draw_icon(c, kind, cx, cy, s, color, width=2):
         L(cx, cy - h * .05, cx, cy + h * .4)
         c.create_oval(cx - 1.5, cy - h * .38 - 1.5, cx + 1.5, cy - h * .38 + 1.5,
                       fill=color, outline=color)
+    elif kind == "wifi":
+        for r in (0.95, 0.62, 0.30):
+            rr = h * r
+            c.create_arc(cx - rr, cy - rr + h * .45, cx + rr,
+                         cy + rr + h * .45, start=45, extent=90,
+                         style="arc", outline=color, width=w)
+        d = max(2, w)
+        c.create_oval(cx - d, cy + h * .45 - d, cx + d, cy + h * .45 + d,
+                      fill=color, outline=color)
     elif kind == "power":
         c.create_arc(cx - h * .65, cy - h * .6, cx + h * .65, cy + h * .7,
                      start=120, extent=300, style="arc", outline=color, width=w)
@@ -2294,6 +2303,16 @@ class App:
                                 fill=TILE_COLS[ch], outline="")
         tk.Label(foot, text="LaptopSeal v%s" % VERSION, font=self.F(9),
                  fg=MUTED, bg=BG).pack(side="left", pady=self.px(8))
+        self.f_net = tk.Label(foot, text="Network: checking...",
+                              font=self.F(9), fg=MUTED, bg=BG,
+                              cursor="hand2")
+        self.f_net.pack(side="left", padx=self.px(30))
+        self.f_net.bind("<Button-1>", lambda e: self.open_network())
+        try:
+            from netwin import StatusPoller
+            StatusPoller(root, self.f_net)
+        except Exception as e:
+            self.f_net.configure(text="Network: (not available: %s)" % e)
         tk.Label(foot, text="Better devices. A cleaner planet.",
                  font=self.F(10), fg=TEXT, bg=BG).pack(side="right",
                                                        padx=(0, self.px(30)))
@@ -2313,6 +2332,7 @@ class App:
                 ("job", "New Job", "plus", self.nav_new_job),
                 ("settings", "Settings", "gear", lambda: self.show("settings")),
                 ("about", "About", "info", lambda: self.show("about")),
+                ("network", "Wi-Fi / Network", "wifi", self.open_network),
                 ("power", "Shutdown", "power", self.power_off)):
             self.nav_items[key] = self.nav_item(side, text, ic, cmd)
 
@@ -3670,6 +3690,15 @@ class App:
             b.configure(state="disabled" if self.s["manual"].get(comp, {})
                         .get("status") == NOT_FITTED else "normal")
         self.w_next.configure(state="normal")
+
+    def open_network(self):
+        """Wi-Fi list + password (netwin.py)."""
+        try:
+            from netwin import NetworkWindow
+            NetworkWindow(self.tk, self.root, font=self.F, px=self.px)
+        except Exception as e:
+            self.mb.showinfo("Network", "The network window could not open: "
+                             "%s" % e)
 
     def popup(self, win):
         """Make sure a pop-up window is in front of the full-screen main
