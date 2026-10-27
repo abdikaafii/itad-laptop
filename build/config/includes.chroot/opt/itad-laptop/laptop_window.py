@@ -155,7 +155,7 @@ try:
 except Exception:
     TZ = None
 
-VERSION = "1.8.1"
+VERSION = "1.9.0"
 TOOLS_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # --- THESE ARE THE FILES THIS GUI WILL RUN ---
@@ -173,6 +173,12 @@ BLUE, BLUE2, CYAN = "#1E7BFF", "#2E9BFF", "#38BDF8"
 TEXT, MUTED = "#EAF2FF", "#8EA6C8"
 OK, BAD, WARN = "#34D399", "#F87171", "#FBBF24"
 RED_BAN, GREEN_BAN = "#C62F2F", "#1FA971"
+# v1.9: banner design (dark teal banner, tile tick logo)
+BANNER, BANNER2 = "#07334A", "#0A4560"
+TILE_COLS = {"r": "#E8453C", "o": "#F59E0B", "y": "#FACC15", "g": "#22C55E",
+             "t": "#14B8A6", "c": "#38BDF8", "b": "#1E7BFF"}
+# our logo: coloured tiles that form a tick (= certified)
+TICK_TILES = ["...b", "..ct", "ygt.", ".o.."]
 FONT = "DejaVu Sans"
 
 ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]|\x1b\([A-Z0-9]")
@@ -2195,55 +2201,75 @@ class App:
             self.root.option_add(opt, val)
 
     # ---------- the frame around every screen ----------
+    def draw_tiles(self, c, x, y, size, gap, rows=TICK_TILES):
+        """The ITAD tile mark (a tick made of coloured squares)."""
+        for r, line in enumerate(rows):
+            for k, ch in enumerate(line):
+                if ch in TILE_COLS:
+                    x0 = x + k * (size + gap)
+                    y0 = y + r * (size + gap)
+                    c.create_rectangle(x0, y0, x0 + size, y0 + size,
+                                       fill=TILE_COLS[ch], outline="")
+
     def build_shell(self):
         tk, root = self.tk, self.root
-        # header
-        head = tk.Frame(root, bg=BG)
+        p = self.px
+        # ---- banner (header)
+        head = tk.Frame(root, bg=BANNER, height=p(92))
         head.pack(fill="x")
-        logo = tk.Canvas(head, width=self.px(62), height=self.px(70), bg=BG,
+        head.pack_propagate(False)
+        sq, gp = p(14), p(3)
+        mark = tk.Canvas(head, width=4 * sq + 3 * gp + 2,
+                         height=4 * sq + 3 * gp + 2, bg=BANNER,
                          highlightthickness=0)
-        logo.pack(side="left", padx=(self.px(28), self.px(12)),
-                  pady=self.px(10))
-        self.draw_logo(logo, self.px(31), self.px(35), self.px(58))
-        brand = tk.Frame(head, bg=BG)
-        brand.pack(side="left")
-        name = tk.Frame(brand, bg=BG)
-        name.pack(anchor="w")
-        tk.Label(name, text="IT", font=self.F(30, True), fg="white",
-                 bg=BG).pack(side="left")
-        tk.Label(name, text="AD", font=self.F(30, True), fg=BLUE2,
-                 bg=BG).pack(side="left")
-        tk.Label(brand, text="S E C U R E   •   T E S T   •   "
-                             "W I P E   •   R E D E P L O Y",
-                 font=self.F(8), fg="#BFD3F2", bg=BG).pack(anchor="w")
+        mark.pack(side="left", padx=(p(26), p(14)))
+        self.draw_tiles(mark, 1, 1, sq, gp)
+        word = tk.Frame(head, bg=BANNER)
+        word.pack(side="left")
+        tk.Label(word, text="IT", font=self.F(38, True), fg="white",
+                 bg=BANNER).pack(side="left")
+        tk.Label(word, text="AD", font=self.F(38, True), fg=CYAN,
+                 bg=BANNER).pack(side="left")
+        tk.Label(word, text=" LAPTOPSEAL", font=self.F(16, True), fg="white",
+                 bg=BANNER).pack(side="left", anchor="s", pady=(0, p(8)))
+        tk.Frame(head, bg="#D7E7F2", width=2, height=p(56)).pack(
+            side="left", padx=p(22))
+        tk.Label(head, text="Certified\nAutomated Erasure\n& Device Testing",
+                 font=self.F(11), fg="white", bg=BANNER,
+                 justify="left").pack(side="left")
+        # little tiles in the bottom-right corner
+        conf = tk.Canvas(head, width=4 * p(14) + 3 * p(4),
+                         height=p(14), bg=BANNER, highlightthickness=0)
+        conf.place(relx=1.0, rely=1.0, anchor="se")
+        for k, ch in enumerate("yoct"):
+            x0 = k * (p(14) + p(4))
+            conf.create_rectangle(x0, 0, x0 + p(14), p(14),
+                                  fill=TILE_COLS[ch], outline="")
         # status box (right)
-        box = tk.Frame(head, bg=CARD2, highlightbackground=BORDER,
+        box = tk.Frame(head, bg=BANNER2, highlightbackground="#2E6E8E",
                        highlightthickness=1)
-        box.pack(side="right", padx=self.px(28))
-        self.icon(box, "monitor", 30, "#D8E6FA", CARD2).pack(
-            side="left", padx=(self.px(16), self.px(8)), pady=self.px(10))
-        s1 = tk.Frame(box, bg=CARD2)
-        s1.pack(side="left", padx=(0, self.px(18)))
-        tk.Label(s1, text="Booted from USB", font=self.F(10), fg=TEXT,
-                 bg=CARD2).pack(anchor="w")
-        self.h_ready = tk.Label(s1, text="", font=self.F(9), bg=CARD2)
+        box.pack(side="right", padx=p(26))
+        s1 = tk.Frame(box, bg=BANNER2)
+        s1.pack(side="left", padx=(p(16), p(16)), pady=p(8))
+        tk.Label(s1, text="USB B (reports)", font=self.F(9), fg="#BFD3F2",
+                 bg=BANNER2).pack(anchor="w")
+        self.h_ready = tk.Label(s1, text="", font=self.F(10, True),
+                                bg=BANNER2)
         self.h_ready.pack(anchor="w")
-        tk.Frame(box, bg=BORDER, width=1).pack(side="left", fill="y",
-                                               pady=self.px(10))
-        self.icon(box, "clock", 28, "#D8E6FA", CARD2).pack(
-            side="left", padx=(self.px(16), self.px(8)))
-        s2 = tk.Frame(box, bg=CARD2)
-        s2.pack(side="left", padx=(0, self.px(18)))
-        self.h_time = tk.Label(s2, text="", font=self.F(10), fg=TEXT,
-                               bg=CARD2)
+        tk.Frame(box, bg="#2E6E8E", width=1).pack(side="left", fill="y",
+                                                  pady=p(8))
+        s2 = tk.Frame(box, bg=BANNER2)
+        s2.pack(side="left", padx=p(16))
+        self.h_time = tk.Label(s2, text="", font=self.F(11, True), fg=TEXT,
+                               bg=BANNER2)
         self.h_time.pack(anchor="w")
-        self.h_date = tk.Label(s2, text="", font=self.F(9), fg=MUTED,
-                               bg=CARD2)
+        self.h_date = tk.Label(s2, text="", font=self.F(9), fg="#BFD3F2",
+                               bg=BANNER2)
         self.h_date.pack(anchor="w")
-        self.h_sep2 = tk.Frame(box, bg=BORDER, width=1)
-        self.h_user_i = self.icon(box, "user", 26, "#D8E6FA", CARD2)
+        self.h_sep2 = tk.Frame(box, bg="#2E6E8E", width=1)
+        self.h_user_i = self.icon(box, "user", 24, "#D8E6FA", BANNER2)
         self.h_user = tk.Label(box, text="", font=self.F(10, True), fg=TEXT,
-                               bg=CARD2)
+                               bg=BANNER2)
         if self.dry:
             tk.Label(head, text="  DRY RUN - nothing will be erased  ",
                      font=self.F(10, True), fg=NAVY, bg=WARN).pack(
@@ -2253,15 +2279,21 @@ class App:
                                font=self.F(10, True), fg="white", bg=RED_BAN)
         if self.test_mode:
             self.h_test.pack(side="right", padx=4)
-        tk.Frame(root, bg=BORDER, height=1).pack(fill="x")
 
         # footer
         foot = tk.Frame(root, bg=BG)
         foot.pack(side="bottom", fill="x")
         tk.Frame(root, bg=BORDER, height=1).pack(side="bottom", fill="x")
-        tk.Label(foot, text="ITAD Laptop v%s" % VERSION, font=self.F(9),
-                 fg=MUTED, bg=BG).pack(side="left", padx=self.px(30),
-                                       pady=self.px(8))
+        fs = tk.Canvas(foot, width=self.px(48), height=self.px(8), bg=BG,
+                       highlightthickness=0)
+        fs.pack(side="left", padx=(self.px(30), self.px(10)),
+                pady=self.px(10))
+        for k, ch in enumerate("rygcb"):
+            x0 = k * self.px(10)
+            fs.create_rectangle(x0, 0, x0 + self.px(7), self.px(7),
+                                fill=TILE_COLS[ch], outline="")
+        tk.Label(foot, text="LaptopSeal v%s" % VERSION, font=self.F(9),
+                 fg=MUTED, bg=BG).pack(side="left", pady=self.px(8))
         tk.Label(foot, text="Better devices. A cleaner planet.",
                  font=self.F(10), fg=TEXT, bg=BG).pack(side="right",
                                                        padx=(0, self.px(30)))
@@ -2537,173 +2569,249 @@ class App:
     # ---------- Home ----------
     def build_home(self):
         tk = self.tk
+        p = self.px
         pg = self.new_page("home")
         self.v_tech = tk.StringVar(value="")
         self.v_job = tk.StringVar(value=self.s["job_id"])
         self.v_asset = tk.StringVar(value=self.s["serial"])
         self.v_loc = tk.StringVar(value=LOCATIONS[0])
-        right = tk.Frame(pg, bg=BG, width=self.px(370))
-        right.pack(side="right", fill="y", padx=(0, self.px(28)),
-                   pady=(self.px(26), self.px(10)))
-        right.pack_propagate(False)
-        self.hero = tk.Canvas(pg, bg=BG, highlightthickness=0)
-        self.hero.pack(side="left", fill="both", expand=True)
-        self.hero_btn = Pill(self, self.hero, "Start New Job",
-                             self.home_start, width=370, height=72,
-                             kind="primary", icon="play")
-        self.hero_img = None
-        for nm in ("hero.png", "home.png", "background.png"):
-            p = os.path.join(TOOLS_DIR, nm)
-            if os.path.isfile(p):
-                try:
-                    self.hero_img = tk.PhotoImage(file=p)
-                except Exception:
-                    self.hero_img = None
-                break
-        self.hero.bind("<Configure>", lambda e: self.draw_hero())
+        # title row + big start button
+        top = tk.Frame(pg, bg=BG)
+        top.pack(fill="x", padx=p(28), pady=(p(18), p(10)))
+        tt = tk.Frame(top, bg=BG)
+        tt.pack(side="left")
+        self.hm_title = self.lbl(tt, "Ready for the next laptop", 22, True,
+                                 bg=BG)
+        self.hm_title.pack(anchor="w")
+        self.hm_sub = self.lbl(tt, "", 11, fg=MUTED, bg=BG)
+        self.hm_sub.pack(anchor="w")
+        self.hero_btn = Pill(self, top, "Start New Job", self.home_start,
+                             width=300, height=62, kind="primary",
+                             icon="play")
+        self.hero_btn.pack(side="right")
+        # three cards: this laptop / technician + job / today
+        row = tk.Frame(pg, bg=BG)
+        row.pack(fill="x", padx=p(22))
 
-        # right panel: technician + current job
-        box = tk.Frame(right, bg=NAVY, highlightbackground="#2B5FA8",
-                       highlightthickness=1)
-        box.pack(fill="x")
-        p = self.px
-        top = tk.Frame(box, bg=NAVY, cursor="hand2")
-        top.pack(fill="x", padx=p(22), pady=(p(18), p(12)))
-        self.icon(top, "user", 30, TEXT, NAVY).pack(side="left",
-                                                    padx=(0, p(12)))
-        tk.Label(top, text="Technician Login", font=self.F(14, True),
-                 fg=TEXT, bg=NAVY).pack(side="left")
-        self.icon(top, "arrow", 18, TEXT, NAVY).pack(side="right")
-        for w in top.winfo_children() + [top]:
-            w.bind("<Button-1>", lambda e: self.home_login())
-        tk.Frame(box, bg=BORDER, height=1).pack(fill="x", padx=p(22))
-        who = tk.Frame(box, bg=NAVY)
-        who.pack(fill="x", padx=p(22), pady=p(14))
-        self.icon(who, "user", 28, MUTED, NAVY).pack(side="left",
-                                                     padx=(0, p(12)))
-        wt = tk.Frame(who, bg=NAVY)
-        wt.pack(side="left")
-        self.hm_who = tk.Label(wt, text="", font=self.F(12), fg=TEXT,
-                               bg=NAVY)
-        self.hm_who.pack(anchor="w")
-        self.hm_who2 = tk.Label(wt, text="", font=self.F(9), fg=MUTED,
-                                bg=NAVY)
-        self.hm_who2.pack(anchor="w")
-        tk.Frame(box, bg=BORDER, height=1).pack(fill="x", padx=p(22))
-        jt = tk.Frame(box, bg=NAVY)
-        jt.pack(fill="x", padx=p(22), pady=(p(14), p(6)))
-        self.icon(jt, "doc", 28, TEXT, NAVY).pack(side="left",
-                                                  padx=(0, p(12)))
-        tk.Label(jt, text="Current Job", font=self.F(13, True), fg=TEXT,
-                 bg=NAVY).pack(side="left")
-        grid = tk.Frame(box, bg=NAVY)
-        grid.pack(fill="x", padx=p(22))
-        self.hm_rows = {}
-        for r, k in enumerate(("Job ID", "Asset ID", "Serial Number",
-                               "Location")):
-            tk.Label(grid, text=k, font=self.F(11), fg=TEXT, bg=NAVY).grid(
-                row=r, column=0, sticky="w", pady=p(4))
-            tk.Label(grid, text=":", font=self.F(11), fg=TEXT, bg=NAVY).grid(
-                row=r, column=1, padx=p(10))
-            v = tk.Label(grid, text="-", font=self.F(11), fg=MUTED, bg=NAVY,
-                         anchor="w", wraplength=p(170), justify="left")
-            v.grid(row=r, column=2, sticky="w")
-            self.hm_rows[k] = v
-        self.hm_btn = Pill(self, box, "Login", self.home_login, width=320,
-                           height=50, kind="outline", icon="user")
-        self.hm_btn.pack(padx=p(22), pady=(p(16), p(20)), fill="x")
+        def kv_card(title, keys, weight):
+            outer = tk.Frame(row, bg=NAVY, highlightbackground=BORDER,
+                             highlightthickness=1)
+            outer.pack(side="left", fill="both", expand=True, padx=p(6))
+            inner = tk.Frame(outer, bg=NAVY)
+            inner.pack(fill="both", expand=True, padx=p(16), pady=p(12))
+            tk.Label(inner, text=title, font=self.F(9, True), fg=CYAN,
+                     bg=NAVY).grid(row=0, column=0, columnspan=2,
+                                   sticky="w", pady=(0, p(8)))
+            vals = {}
+            for r, k in enumerate(keys, start=1):
+                tk.Label(inner, text=k, font=self.F(10), fg=MUTED,
+                         bg=NAVY).grid(row=r, column=0, sticky="nw",
+                                       padx=(0, p(14)), pady=p(2))
+                v = tk.Label(inner, text="-", font=self.F(10, True), fg=TEXT,
+                             bg=NAVY, anchor="w", justify="left",
+                             wraplength=p(int(240 * weight)))
+                v.grid(row=r, column=1, sticky="nw", pady=p(2))
+                vals[k] = v
+            return inner, vals
 
-    def draw_hero(self):
-        c = self.hero
-        w, h = c.winfo_width(), c.winfo_height()
-        if w < 50 or h < 50:
-            return
-        c.delete("all")
-        p = self.px
-        # faint server racks in the background
-        for k in range(7):
-            x = w * (0.42 + k * 0.085)
-            c.create_rectangle(x, h * .02, x + w * .05, h * .70,
-                               fill=mix(BG, "#0D2448", .55), outline="")
-            for j in range(10):
-                y = h * (0.06 + j * 0.062)
-                c.create_line(x + 4, y, x + w * .05 - 4, y,
-                              fill=mix(BG, "#1C4A85", .5))
-        x = p(40)
-        # title size: never wider than about half of this area
-        size = 50
-        while size > 26 and x + self.measure("ITAD Laptop",
-                                             self.F(size, True)) > w * .47:
-            size -= 2
-        f_big = self.F(size, True)
-        if self.hero_img is not None:
-            c.create_image(w * .70, h * .40, image=self.hero_img)
-        else:
-            s = min(w * 0.40, h * 0.66)
-            # keep the icons on the right inside the picture area
-            draw_laptop_art(c, min(w * .72, w - s * .84), h * .40, s)
-        c.create_text(x, h * .17, text="Welcome to", anchor="w", fill="white",
-                      font=self.F(size * 0.62, True))
-        c.create_text(x, h * .31, text="ITAD", anchor="w", fill="white",
-                      font=f_big)
-        c.create_text(x + self.measure("ITAD ", f_big), h * .31,
-                      text="Laptop", anchor="w", fill=BLUE2, font=f_big)
-        c.create_text(x, h * .43, text="Secure Data. Sustainable Future.",
-                      anchor="w", fill=TEXT, font=self.F(16))
-        c.create_text(x, h * .50, anchor="nw", fill="#C9D8EE",
-                      font=self.F(11), width=p(330),
-                      text="This application helps you test, diagnose, wipe "
-                           "and prepare laptops for their next life — "
-                           "safely, securely and efficiently.")
-        bx = x
-        for ic, t1, t2, col in (("shield", "Data", "Security", "#4FA8FF"),
-                                ("leaf", "Environmental", "Responsibility",
-                                 "#34D399"),
-                                ("recycle", "IT Asset", "Recycling",
-                                 "#4FC3F7")):
-            r = p(21)
-            cy = h * .73
-            c.create_oval(bx, cy - r, bx + 2 * r, cy + r, outline=col,
-                          width=2, fill=mix(BG, col, .12))
-            draw_icon(c, ic, bx + r, cy, r * 1.1, col, 2)
-            c.create_text(bx + 2 * r + p(10), cy - p(8), text=t1, anchor="w",
-                          fill=TEXT, font=self.F(9))
-            c.create_text(bx + 2 * r + p(10), cy + p(8), text=t2, anchor="w",
-                          fill=TEXT, font=self.F(9))
-            bx += 2 * r + p(20) + max(self.measure(t1, self.F(9)),
-                                      self.measure(t2, self.F(9))) + p(14)
-        c.create_window(w * .55, h * .90, window=self.hero_btn.c)
+        _, self.hm_laptop = kv_card("THIS LAPTOP", (
+            "Model", "Serial", "CPU", "Memory", "Drive"), 1.2)
+        jc, self.hm_rows = kv_card("TECHNICIAN AND JOB", (
+            "Technician", "Job ID", "Asset ID", "Location"), 1.0)
+        self.hm_btn = Pill(self, jc, "Login", self.home_login, width=220,
+                           height=40, kind="outline", icon="user")
+        self.hm_btn.grid(row=6, column=0, columnspan=2, sticky="w",
+                         pady=(p(10), 0))
+        self.hm_who2 = tk.Label(jc, text="", font=self.F(9), fg=MUTED,
+                                bg=NAVY, wraplength=p(300), justify="left")
+        self.hm_who2.grid(row=7, column=0, columnspan=2, sticky="w",
+                          pady=(p(4), 0))
+        _, self.hm_today = kv_card("TODAY ON THIS USB B", (
+            "Laptops done", "Passed", "Failed", "Not finished",
+            "Last report"), 1.0)
+        # four status tiles
+        tiles = tk.Frame(pg, bg=BG)
+        tiles.pack(fill="x", padx=p(22), pady=(p(12), 0))
+        self.hm_tiles = {}
+        for key, title in (("absolute", "ABSOLUTE"),
+                           ("enrolment", "ENROLMENT"), ("wipe", "WIPE"),
+                           ("tests", "COMPONENTS")):
+            t = tk.Frame(tiles, bg=NAVY, highlightbackground=BORDER,
+                         highlightthickness=1)
+            t.pack(side="left", fill="both", expand=True, padx=p(6))
+            stripe = tk.Frame(t, bg=MUTED, width=p(6))
+            stripe.pack(side="left", fill="y")
+            body = tk.Frame(t, bg=NAVY)
+            body.pack(side="left", fill="both", expand=True, padx=p(12),
+                      pady=p(10))
+            tk.Label(body, text=title, font=self.F(9, True), fg=MUTED,
+                     bg=NAVY).pack(anchor="w")
+            val = tk.Label(body, text="-", font=self.F(17, True), fg=MUTED,
+                           bg=NAVY)
+            val.pack(anchor="w")
+            note = tk.Label(body, text="", font=self.F(9), fg=MUTED,
+                            bg=NAVY, wraplength=p(220), justify="left")
+            note.pack(anchor="w")
+            self.hm_tiles[key] = (stripe, val, note)
+        # recent reports (today)
+        rc = tk.Frame(pg, bg=NAVY, highlightbackground=BORDER,
+                      highlightthickness=1)
+        rc.pack(fill="both", expand=True, padx=p(28), pady=(p(12), p(4)))
+        tk.Label(rc, text="RECENT REPORTS (TODAY)", font=self.F(9, True),
+                 fg=CYAN, bg=NAVY).pack(anchor="w", padx=p(16),
+                                        pady=(p(10), p(4)))
+        self.hm_recent = tk.Frame(rc, bg=NAVY)
+        self.hm_recent.pack(fill="both", expand=True, padx=p(16),
+                            pady=(0, p(8)))
+
+    def today_counts(self):
+        """Reports saved today in the reports folder of USB B."""
+        res = {"done": 0, "PASS": 0, "FAIL": 0, "other": 0, "last": "-",
+               "recent": []}
+        day = now().strftime("%Y%m%d")
+        try:
+            d = self.report_dir()
+            names = sorted(n for n in os.listdir(d)
+                           if n.endswith(".json") and "_%s-" % day in n)
+        except Exception:
+            return res
+        for n in names:
+            try:
+                with open(os.path.join(d, n)) as f:
+                    ov = (json.load(f).get("overall") or "").upper()
+            except Exception:
+                continue
+            res["done"] += 1
+            if ov in ("PASS", "FAIL"):
+                res[ov] += 1
+            else:
+                res["other"] += 1
+            res["last"] = "%s  %s:%s" % (n.split("_")[1], n[-11:-9],
+                                         n[-9:-7])
+            res["recent"].append(("%s:%s" % (n[-11:-9], n[-9:-7]),
+                                  n.split("_")[1], ov or "?"))
+        return res
 
     def refresh_home(self):
         name = self.tech()
         if name:
-            self.hm_who.configure(text="Signed in as %s" % name, fg=OK)
-            self.hm_who2.configure(text="Ready to start a job")
             self.hm_btn.configure(text="Sign out", command=self.sign_out)
-            self.h_sep2.pack(side="left", fill="y", pady=self.px(10))
-            self.h_user_i.pack(side="left", padx=(self.px(16), self.px(8)))
+            self.h_sep2.pack(side="left", fill="y", pady=self.px(8))
+            self.h_user_i.pack(side="left", padx=(self.px(14), self.px(6)))
             self.h_user.configure(text=name)
-            self.h_user.pack(side="left", padx=(0, self.px(18)))
+            self.h_user.pack(side="left", padx=(0, self.px(16)))
         else:
-            self.hm_who.configure(text="Not logged in", fg=TEXT)
-            self.hm_who2.configure(text="Please login to continue")
             self.hm_btn.configure(text="Login", command=self.home_login)
             for w in (self.h_sep2, self.h_user_i, self.h_user):
                 w.pack_forget()
         if not self.persistent:
             self.hm_who2.configure(text="WARNING: reports will NOT be kept "
-                                        "- no USB stick to save them on",
-                                   fg=BAD)
+                                        "- plug in USB B", fg=BAD)
         else:
-            self.hm_who2.configure(fg=MUTED)
-        vals = {"Job ID": self.job() if self.job_active else "-",
+            self.hm_who2.configure(text="" if name else
+                                   "Please login to continue", fg=MUTED)
+        self.hm_title.configure(text=("Job in progress" if self.job_active
+                                      else "Ready for the next laptop"))
+        self.hm_sub.configure(text="%s  -  %s" % (
+            (self.job() if self.job_active else "No job open"),
+            self.v_loc.get().strip() or "-"))
+        i = self.ident
+        disks = "; ".join("%s GB %s" % (d.get("size_gb"),
+                                        d.get("drive_type", ""))
+                          for d in self.disks) or "-"
+        lap = {"Model": ("%s %s" % (i.get("manufacturer", ""),
+                                    i.get("model", ""))).strip() or "-",
+               "Serial": self.serial() or "-",
+               "CPU": i.get("cpu", "") or "-",
+               "Memory": ram_text(self.ram, short=True) if self.ram else "-",
+               "Drive": disks}
+        for k, v in lap.items():
+            self.hm_laptop[k].configure(text=v, fg=TEXT if v != "-" else
+                                        MUTED)
+        vals = {"Technician": name or "Not logged in",
+                "Job ID": self.job() if self.job_active else "-",
                 "Asset ID": (self.asset() or "-") if self.job_active else "-",
-                "Serial Number": self.serial() or "-",
                 "Location": self.v_loc.get() if self.job_active else "-"}
         for k, v in vals.items():
-            self.hm_rows[k].configure(text=v, fg=TEXT if v != "-" else MUTED)
+            self.hm_rows[k].configure(text=v, fg=(OK if k == "Technician"
+                                                  and name else
+                                                  TEXT if v != "-" else
+                                                  MUTED))
+        t = self.today_counts()
+        for k, v, col in (("Laptops done", t["done"], TEXT),
+                          ("Passed", t["PASS"], OK),
+                          ("Failed", t["FAIL"], BAD),
+                          ("Not finished", t["other"], WARN),
+                          ("Last report", t["last"], TEXT)):
+            self.hm_today[k].configure(text=str(v), fg=col if v not in
+                                       (0, "-") else MUTED)
+        for w in self.hm_recent.winfo_children():
+            w.destroy()
+        recent = list(reversed(t["recent"]))[:6]
+        if not recent:
+            self.lbl(self.hm_recent, "No reports saved today yet.", 10,
+                     fg=MUTED, bg=NAVY).grid(row=0, column=0, sticky="w")
+        for r, (tm, ser, ov) in enumerate(recent):
+            colr = {"PASS": OK, "FAIL": BAD}.get(ov, WARN)
+            self.lbl(self.hm_recent, tm, 10, fg=MUTED, bg=NAVY).grid(
+                row=r, column=0, sticky="w", padx=(0, self.px(18)))
+            self.lbl(self.hm_recent, ser, 10, True, bg=NAVY).grid(
+                row=r, column=1, sticky="w", padx=(0, self.px(18)))
+            self.lbl(self.hm_recent, ov, 10, True, fg=colr, bg=NAVY).grid(
+                row=r, column=2, sticky="w")
+        self.refresh_tiles()
         self.hero_btn.configure(text="Continue Job" if self.job_active
                                 else "Start New Job")
+
+    def refresh_tiles(self):
+        def col(v):
+            v = (v or "").upper()
+            if any(w in v for w in ("CLEAR", "CLEAN", "WIPED", "PASS")):
+                return OK
+            if any(w in v for w in ("ACTIVE", "BLOCKED", "FAIL", "LOCK")):
+                return BAD
+            if v in ("", "-", "NOT RUN"):
+                return MUTED
+            return WARN
+        chk = self.s.get("check") or {}
+        if not self.job_active:
+            vals = {"absolute": ("-", "Checked when a job starts"),
+                    "enrolment": ("-", "Autopilot / MDM"),
+                    "wipe": ("-", "Secure erase of every drive"),
+                    "tests": ("-", "Component tests")}
+        else:
+            er = chk.get("autopilot_result", "")
+            ab = chk.get("absolute_result", "")
+            if self.test_mode and not chk:
+                ab = er = "SKIPPED"
+            enr = {"CLEAN": "CLEAN", "BLOCKED": "ACTIVE"}.get(er, er or "-")
+            ws = self.s.get("wipe_state") or "NOT RUN"
+            try:
+                tests = self.collect_tests()
+                fitted = [x for x in tests if x.get("status") != "N/A"]
+                good = sum(1 for x in fitted if x.get("status") == "PASS")
+                bad = [x.get("component", "") for x in fitted
+                       if x.get("status") == "FAIL"]
+                tv = ("%d / %d" % (good, len(fitted))) if fitted else "-"
+                tn = ("Failed: " + ", ".join(bad[:3])) if bad else \
+                    ("Component tests" if not fitted else "No failures")
+            except Exception:
+                tv, tn = "-", "Component tests"
+            vals = {"absolute": (ab or "-", "BIOS / firmware lock"),
+                    "enrolment": (enr, "Autopilot / MDM"),
+                    "wipe": ("READY" if ws == "NOT RUN" else ws,
+                             "Secure erase of every drive"),
+                    "tests": (tv, tn)}
+        for key, (v, note) in vals.items():
+            stripe, val, nl = self.hm_tiles[key]
+            c = col(v) if key != "tests" else (
+                MUTED if v == "-" else (BAD if note.startswith("Failed")
+                                        else OK))
+            if key == "wipe" and v == "READY":
+                c = CYAN
+            stripe.configure(bg=c)
+            val.configure(text=v, fg=c)
+            nl.configure(text=note)
 
     def home_start(self):
         if self.job_active:
