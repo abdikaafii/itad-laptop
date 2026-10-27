@@ -8,19 +8,19 @@ terminal-font: "DejaVu Sans Regular 16"
 
 + boot_menu {
   left = 22%
-  top = 31%
+  top = 34%
   width = 56%
-  height = 30%
-  item_font = "DejaVu Sans Bold 30"
+  height = 24%
+  item_font = "DejaVu Sans Bold 22"
   item_color = "#C9D8EE"
-  selected_item_font = "DejaVu Sans Bold 30"
+  selected_item_font = "DejaVu Sans Bold 22"
   selected_item_color = "#FFFFFF"
-  item_height = 92
-  item_padding = 14
-  item_spacing = 18
-  icon_width = 64
-  icon_height = 64
-  item_icon_space = 26
+  item_height = 52
+  item_padding = 10
+  item_spacing = 8
+  icon_width = 40
+  icon_height = 40
+  item_icon_space = 18
   selected_item_pixmap_style = "select_*.png"
   scrollbar = false
 }

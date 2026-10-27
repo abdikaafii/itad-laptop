@@ -19,7 +19,7 @@ names, icons and tips).
 
 ## Change it
 
-`make_theme.py` makes everything again (background, icons, fonts,
+`make_theme.py` (v2, fits small screens too) makes everything again (background, icons, fonts,
 `theme.txt`, `ventoy.json`) and `preview.png`.
 Auto-start a tool after some seconds: add to `"control"` in ventoy.json
 `{"VTOY_MENU_TIMEOUT": "10"}` and `{"VTOY_DEFAULT_IMAGE": "/ITAD-LaptopSeal.iso"}`.

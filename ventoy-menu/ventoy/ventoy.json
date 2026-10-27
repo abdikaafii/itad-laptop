@@ -18,7 +18,7 @@
     "gfxmode": "max",
     "display_mode": "GUI",
     "fonts": [
-      "/ventoy/theme/itad/dvb30.pf2",
+      "/ventoy/theme/itad/dvb22.pf2",
       "/ventoy/theme/itad/dv20.pf2",
       "/ventoy/theme/itad/dv16.pf2"
     ]
@@ -26,15 +26,15 @@
   "menu_alias": [
     {
       "image": "/ITAD-LaptopSeal.iso",
-      "alias": "LaptopSeal   -   Laptops and PCs"
+      "alias": "LaptopSeal  -  Laptops and PCs"
     },
     {
       "image": "/ITAD-PhoneSeal.iso",
-      "alias": "PhoneSeal   -   Phones and tablets"
+      "alias": "PhoneSeal  -  Phones and tablets"
     },
     {
       "image": "/ITAD-SwitchSeal.iso",
-      "alias": "SwitchSeal   -   Cisco switches"
+      "alias": "SwitchSeal  -  Network switches"
     }
   ],
   "menu_class": [
@@ -53,20 +53,20 @@
   ],
   "menu_tip": {
     "left": "22%",
-    "top": "66%",
+    "top": "60%",
     "color": "#8EA6C8",
     "tips": [
       {
         "image": "/ITAD-LaptopSeal.iso",
-        "tip": "Absolute and enrolment check, secure wipe, component tests, signed certificate"
+        "tip": "Absolute and enrolment check, wipe, tests, certificate"
       },
       {
         "image": "/ITAD-PhoneSeal.iso",
-        "tip": "iPhone, iPad, Android: lock checks, tests in the browser, erase, certificate"
+        "tip": "iPhone, iPad, Android: lock checks, tests, erase, certificate"
       },
       {
         "image": "/ITAD-SwitchSeal.iso",
-        "tip": "Console cable: hardware and port tests, configuration wipe, certificate"
+        "tip": "Any switch make: port tests, config wipe, certificate"
       }
     ]
   }

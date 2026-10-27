@@ -18,9 +18,13 @@ TILE = {"r": "#E8453C", "o": "#F59E0B", "y": "#FACC15", "g": "#22C55E",
 TICK = ["...b", "..ct", "ygt.", ".o.."]
 
 # menu box position (same numbers go into theme.txt)
-MX, MY, MW, MH = 0.22, 0.31, 0.56, 0.30
-TIP_Y = 0.655
-ITEM_H, ITEM_SP, ICON = 92, 18, 64
+# v2: sizes chosen so all 3 tools fit inside the box on small laptop
+# screens too (1366x768, 1280x720), not only on 1920x1080; the tip sits
+# under the box instead of on top of the third tool.
+MX, MY, MW, MH = 0.22, 0.34, 0.56, 0.24
+TIP_Y = 0.60
+ITEM_H, ITEM_SP, ICON = 52, 8, 40
+ITEM_FONT = 22
 
 
 def rgb(h):
@@ -135,14 +139,15 @@ def draw_pf2(img, path, x, y_base, text, colour):
 
 
 fonts = {
-    "item": make_pf2(FD + "DejaVuSans-Bold.ttf", 30, "DejaVu Sans Bold 30",
-                     "DejaVu Sans", "bold", os.path.join(TD, "dvb30.pf2")),
+    "item": make_pf2(FD + "DejaVuSans-Bold.ttf", ITEM_FONT,
+                     "DejaVu Sans Bold %d" % ITEM_FONT, "DejaVu Sans", "bold",
+                     os.path.join(TD, "dvb%d.pf2" % ITEM_FONT)),
     "tip": make_pf2(FD + "DejaVuSans.ttf", 20, "DejaVu Sans Regular 20",
                     "DejaVu Sans", "normal", os.path.join(TD, "dv20.pf2")),
     "small": make_pf2(FD + "DejaVuSans.ttf", 16, "DejaVu Sans Regular 16",
                       "DejaVu Sans", "normal", os.path.join(TD, "dv16.pf2")),
 }
-for fn in ("dvb30.pf2", "dv20.pf2", "dv16.pf2"):
+for fn in ("dvb%d.pf2" % ITEM_FONT, "dv20.pf2", "dv16.pf2"):
     info, gl = read_pf2(os.path.join(TD, fn))
     assert info["FILE"] == "PFF2" and len(gl) == len(CHARS), fn
 print("fonts ok:", fonts)
@@ -263,11 +268,11 @@ terminal-font: "{small}"
   selected_item_font = "{item}"
   selected_item_color = "#FFFFFF"
   item_height = {ih}
-  item_padding = 14
+  item_padding = 10
   item_spacing = {isp}
   icon_width = {ic}
   icon_height = {ic}
-  item_icon_space = 26
+  item_icon_space = 18
   selected_item_pixmap_style = "select_*.png"
   scrollbar = false
 }}
@@ -321,15 +326,12 @@ terminal-font: "{small}"
 open(os.path.join(TD, "theme.txt"), "w").write(theme)
 
 # --------------------------------------------------------------- ventoy.json
-ITEMS = [("ITAD-LaptopSeal", "LaptopSeal   -   Laptops and PCs", "laptop",
-          "Absolute and enrolment check, secure wipe, component tests, "
-          "signed certificate"),
-         ("ITAD-PhoneSeal", "PhoneSeal   -   Phones and tablets", "phone",
-          "iPhone, iPad, Android: lock checks, tests in the browser, erase, "
-          "certificate"),
-         ("ITAD-SwitchSeal", "SwitchSeal   -   Cisco switches", "switch",
-          "Console cable: hardware and port tests, configuration wipe, "
-          "certificate")]
+ITEMS = [("ITAD-LaptopSeal", "LaptopSeal  -  Laptops and PCs", "laptop",
+          "Absolute and enrolment check, wipe, tests, certificate"),
+         ("ITAD-PhoneSeal", "PhoneSeal  -  Phones and tablets", "phone",
+          "iPhone, iPad, Android: lock checks, tests, erase, certificate"),
+         ("ITAD-SwitchSeal", "SwitchSeal  -  Network switches", "switch",
+          "Any switch make: port tests, config wipe, certificate")]
 cfg = {
     "control": [
         {"VTOY_DEFAULT_MENU_MODE": "0"},
@@ -341,7 +343,7 @@ cfg = {
         "file": "/ventoy/theme/itad/theme.txt",
         "gfxmode": "max",
         "display_mode": "GUI",
-        "fonts": ["/ventoy/theme/itad/dvb30.pf2",
+        "fonts": ["/ventoy/theme/itad/dvb%d.pf2" % ITEM_FONT,
                   "/ventoy/theme/itad/dv20.pf2",
                   "/ventoy/theme/itad/dv16.pf2"],
     },
@@ -356,25 +358,43 @@ with open(os.path.join(OUT, "ventoy", "ventoy.json"), "w") as fh:
     json.dump(cfg, fh, indent=2)
 
 # --------------------------------------------------------------- preview
-pv = bg.copy()
-mx, my = int(W * MX), int(H * MY)
-mw = int(W * MW)
-sel = 0
-for i, (k, a, c, t) in enumerate(ITEMS):
-    y = my + i * (ITEM_H + ITEM_SP)
-    if i == sel:
-        ImageDraw.Draw(pv).rectangle([mx, y, mx + mw, y + ITEM_H],
-                                     fill=rgb("#1E7BFF"))
-        ImageDraw.Draw(pv).rectangle([mx, y, mx + 6, y + ITEM_H],
-                                     fill=rgb("#38BDF8"))
-    ic = Image.open(os.path.join(TD, "icons", c + ".png"))
-    pv.paste(ic, (mx + 14, y + (ITEM_H - ICON) // 2), ic)
-    draw_pf2(pv, os.path.join(TD, "dvb30.pf2"), mx + 14 + ICON + 26,
-             y + ITEM_H // 2 + 11, a, "#FFFFFF" if i == sel else "#C9D8EE")
-draw_pf2(pv, os.path.join(TD, "dv20.pf2"), int(W * 0.22), int(H * TIP_Y) + 20,
-         ITEMS[sel][3], "#8EA6C8")
-draw_pf2(pv, os.path.join(TD, "dv16.pf2"), int(W * .03), int(H * .95) - 4,
-         "L:Language  F1:Help  F2:Browse  F3:TreeView  F4:Localboot  "
-         "F5:Tools  F6:ExMenu", "#8EA6C8")
-pv.save(os.path.join(OUT, "ventoy_menu_preview.png"))
+def preview(sw, sh, name):
+    """Draws the menu like GRUB does on a sw x sh screen: the background
+    and % positions scale, the fonts / row sizes stay in pixels."""
+    pv = bg.resize((sw, sh), Image.LANCZOS)
+    mx, my, mw = int(sw * MX), int(sh * MY), int(sw * MW)
+    sel = 0
+    for i, (k, a, c, t) in enumerate(ITEMS):
+        y = my + i * (ITEM_H + ITEM_SP)
+        if i == sel:
+            ImageDraw.Draw(pv).rectangle([mx, y, mx + mw, y + ITEM_H],
+                                         fill=rgb("#1E7BFF"))
+            ImageDraw.Draw(pv).rectangle([mx, y, mx + 6, y + ITEM_H],
+                                         fill=rgb("#38BDF8"))
+        ic = Image.open(os.path.join(TD, "icons", c + ".png"))
+        pv.paste(ic, (mx + 10, y + (ITEM_H - ICON) // 2), ic)
+        draw_pf2(pv, os.path.join(TD, "dvb%d.pf2" % ITEM_FONT),
+                 mx + 10 + ICON + 18, y + ITEM_H // 2 + 8, a,
+                 "#FFFFFF" if i == sel else "#C9D8EE")
+    last = my + 3 * ITEM_H + 2 * ITEM_SP
+    tip_y = int(sh * TIP_Y)
+    assert last <= int(sh * (MY + MH)), "%s: tools do not fit in the box" % name
+    assert last + 8 <= tip_y, "%s: tip overlaps the tools" % name
+    panel_r = int(sw * (MX + MW)) + int(30 * sw / W)
+    for k, a, c, t in ITEMS:
+        end = draw_pf2(pv.copy(), os.path.join(TD, "dv20.pf2"),
+                       int(sw * 0.22), tip_y + 20, t, "#8EA6C8")
+        assert end <= panel_r, "%s: tip too long: %s" % (name, t)
+    draw_pf2(pv, os.path.join(TD, "dv20.pf2"), int(sw * 0.22), tip_y + 20,
+             ITEMS[sel][3], "#8EA6C8")
+    draw_pf2(pv, os.path.join(TD, "dv16.pf2"), int(sw * .03),
+             int(sh * .95) - 4, "L:Language  F1:Help  F2:Browse  "
+             "F3:TreeView  F4:Localboot  F5:Tools  F6:ExMenu", "#8EA6C8")
+    pv.save(os.path.join(OUT, name))
+    print(name, "ok: tools end at", last, "tip at", tip_y)
+
+
+preview(1920, 1080, "ventoy_menu_preview.png")
+preview(1366, 768, "ventoy_menu_preview_small.png")
+preview(1280, 720, "ventoy_menu_preview_720.png")
 print("done")
