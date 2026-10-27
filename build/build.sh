@@ -28,6 +28,17 @@
 #     reports, keys and removal requests.
 #   * Faster: system files packed with zstd (much quicker to read from a
 #     USB stick), no waiting for the network, unused services switched off.
+#
+# v4 - Apple Mac support:
+#   * Intel MacBooks up to 2017: Broadcom Wi-Fi driver (wl) is loaded
+#     automatically, but ONLY on Macs (PCs keep their normal drivers).
+#   * Intel MacBooks 2018-2020 with the T2 chip: apple-bce driver for the
+#     built-in keyboard, trackpad and the internal SSD, plus the boot
+#     options T2 Macs need (intel_iommu=on iommu=pt pcie_ports=compat).
+#   * Apple chip Macs (M1 and newer) can NOT start any USB like this one;
+#     they are erased with Apple's own tools instead.
+#   * The Mac driver step can never break the build: if it fails, the ISO
+#     is still made and the build log says what was skipped.
 set -euo pipefail
 cd "$(dirname "$0")"
 CFG="config"; INC="$CFG/includes.chroot"; HOOKS="$CFG/hooks/normal"
@@ -45,7 +56,7 @@ lb config --distribution trixie --architectures amd64 \
   --binary-images iso-hybrid --bootloaders "syslinux,grub-efi" \
   --debian-installer none --memtest none \
   --iso-application "ITAD Laptop Tool" --iso-volume "ITAD_LAPTOP" \
-  --bootappend-live "boot=live components splash loglevel=6 rd.systemd.show_status=false systemd.show_status=false rd.udev.log_level=3 udev.log_level=3 vt.global_cursor_default=0 plymouth.ignore-serial-consoles vt.default_red=0,170,0,170,0,170,0,40,85,255,85,255,85,255,85,90 vt.default_grn=0,0,170,85,0,0,170,220,85,85,255,255,85,85,255,255 vt.default_blu=0,0,0,0,170,170,170,90,85,85,85,85,255,255,255,140"
+  --bootappend-live "boot=live components splash intel_iommu=on iommu=pt pcie_ports=compat loglevel=6 rd.systemd.show_status=false systemd.show_status=false rd.udev.log_level=3 udev.log_level=3 vt.global_cursor_default=0 plymouth.ignore-serial-consoles vt.default_red=0,170,0,170,0,170,0,40,85,255,85,255,85,255,85,90 vt.default_grn=0,0,170,85,0,0,170,220,85,85,255,255,85,85,255,255 vt.default_blu=0,0,0,0,170,170,170,90,85,85,85,85,255,255,255,140"
 
 echo "== 2b. Packages =="
 # MUST-HAVE packages (all exist in Debian 13). If one of these is missing
@@ -304,6 +315,89 @@ apt-get clean
 exit 0
 EOF
 
+# Apple Mac drivers (old Intel Macs: Broadcom Wi-Fi; T2 Macs: keyboard,
+# trackpad, SSD). Never fatal.
+cat > "$HOOKS/0060-itad-mac-drivers.hook.chroot" <<'EOF'
+#!/bin/sh
+export DEBIAN_FRONTEND=noninteractive
+LOG=/etc/itad-mac-drivers.txt
+: > "$LOG"
+KVERS=$(ls /lib/modules 2>/dev/null)
+echo "kernels: $KVERS" >> "$LOG"
+apt-get update >/dev/null 2>&1 || true
+apt-get install -y dkms linux-headers-amd64 git make gcc >/dev/null 2>&1 \
+  && echo "build tools: ok" >> "$LOG" || echo "build tools: FAILED" >> "$LOG"
+
+# 1) Broadcom Wi-Fi (MacBooks up to 2017)
+if apt-get install -y broadcom-sta-dkms >/dev/null 2>&1; then
+  echo "broadcom-sta (wl): installed" >> "$LOG"
+else
+  echo "broadcom-sta (wl): SKIPPED" >> "$LOG"
+fi
+# The package blocks the normal Broadcom drivers on EVERY computer. Keep
+# them for PCs: the block is applied only on Macs (itad-mac-setup).
+mkdir -p /etc/itad
+for f in /etc/modprobe.d/broadcom-sta-dkms.conf /etc/modprobe.d/blacklist-broadcom-sta.conf; do
+  [ -f "$f" ] && mv -f "$f" /etc/itad/mac-broadcom-blacklist.conf
+done
+
+# 2) T2 Macs (2018-2020): apple-bce driver
+rm -rf /usr/src/apple-bce-*
+if git clone --depth 1 https://github.com/t2linux/apple-bce-drv /tmp/apple-bce >/dev/null 2>&1; then
+  V=$(sed -n 's/^PACKAGE_VERSION="\{0,1\}\([^"]*\)"\{0,1\}/\1/p' /tmp/apple-bce/dkms.conf 2>/dev/null)
+  [ -n "$V" ] || V=0.2
+  rm -rf /tmp/apple-bce/.git
+  cp -r /tmp/apple-bce "/usr/src/apple-bce-$V"
+  dkms add -m apple-bce -v "$V" >/dev/null 2>&1 || true
+  for k in $KVERS; do
+    if dkms install -m apple-bce -v "$V" -k "$k" >>/tmp/apple-bce.log 2>&1; then
+      echo "apple-bce $V for $k: installed" >> "$LOG"
+    else
+      echo "apple-bce $V for $k: FAILED ($(tail -n 3 /tmp/apple-bce.log | tr '\n' ' '))" >> "$LOG"
+    fi
+  done
+  rm -rf /tmp/apple-bce
+else
+  echo "apple-bce: could not download" >> "$LOG"
+fi
+for k in $KVERS; do depmod "$k" 2>/dev/null || true; done
+update-initramfs -u -k all >/dev/null 2>&1 || true
+
+# Smaller ISO: the kernel headers are only needed while building
+apt-get purge -y linux-headers-amd64 'linux-headers-*' >/dev/null 2>&1 || true
+apt-get autoremove -y >/dev/null 2>&1 || true
+apt-get clean
+echo "ITAD Mac drivers: $(tr '\n' ';' < "$LOG")"
+exit 0
+EOF
+
+# At every start-up, before the network starts: on a Mac with a Broadcom
+# Wi-Fi card, switch to the Mac Wi-Fi driver (wl). Does nothing on PCs.
+mkdir -p "$INC/usr/local/sbin" "$INC/etc/systemd/system"
+cat > "$INC/usr/local/sbin/itad-mac-setup" <<'EOF'
+#!/bin/sh
+V=$(cat /sys/class/dmi/id/sys_vendor 2>/dev/null)
+case "$V" in *Apple*) ;; *) exit 0 ;; esac
+echo "ITAD: Apple Mac found ($(cat /sys/class/dmi/id/product_name 2>/dev/null))"
+modprobe apple-bce 2>/dev/null || true
+if lspci -n 2>/dev/null | grep -q ' 0280: 14e4:'; then
+  if ! ls /sys/class/net/*/wireless >/dev/null 2>&1; then
+    [ -f /etc/itad/mac-broadcom-blacklist.conf ] && \
+      { mkdir -p /run/modprobe.d; cp -f /etc/itad/mac-broadcom-blacklist.conf /run/modprobe.d/itad-mac-broadcom.conf; }
+    for m in b43 b43legacy bcma ssb brcmsmac; do modprobe -r "$m" 2>/dev/null; done
+    modprobe wl 2>/dev/null && echo "ITAD: Mac Broadcom Wi-Fi driver (wl) loaded"
+  fi
+fi
+exit 0
+EOF
+chmod +x "$INC/usr/local/sbin/itad-mac-setup"
+printf '%s\n' "[Unit]" "Description=ITAD: Apple Mac drivers" \
+  "After=systemd-udevd.service systemd-modules-load.service" \
+  "Before=NetworkManager.service" \
+  "[Service]" "Type=oneshot" "ExecStart=/usr/local/sbin/itad-mac-setup" \
+  "[Install]" "WantedBy=multi-user.target" \
+  > "$INC/etc/systemd/system/itad-mac-setup.service"
+
 cat > "$HOOKS/0100-itad-plymouth.hook.chroot" <<'EOF'
 #!/bin/sh
 plymouth-set-default-theme itad 2>/dev/null || true
@@ -332,6 +426,7 @@ for u in NetworkManager-wait-online.service systemd-networkd-wait-online.service
 done
 systemctl unmask plymouth-quit.service plymouth-quit-wait.service >/dev/null 2>&1 || true
 systemctl enable itad-splash-timeout.service >/dev/null 2>&1 || true
+systemctl enable itad-mac-setup.service >/dev/null 2>&1 || true
 exit 0
 EOF
 # Plymouth quits when the system is ready, but keeps its last picture on
