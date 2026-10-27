@@ -344,9 +344,18 @@ done
 # 2) T2 Macs (2018-2020): apple-bce driver
 rm -rf /usr/src/apple-bce-*
 if git clone --depth 1 https://github.com/t2linux/apple-bce-drv /tmp/apple-bce >/dev/null 2>&1; then
-  V=$(sed -n 's/^PACKAGE_VERSION="\{0,1\}\([^"]*\)"\{0,1\}/\1/p' /tmp/apple-bce/dkms.conf 2>/dev/null)
-  [ -n "$V" ] || V=0.2
+  V=0.2
   rm -rf /tmp/apple-bce/.git
+  # The driver comes without a dkms.conf: write the standard one
+  cat > /tmp/apple-bce/dkms.conf <<DK
+PACKAGE_NAME="apple-bce"
+PACKAGE_VERSION="$V"
+MAKE[0]="make KERNELRELEASE=\${kernelver}"
+CLEAN="make clean"
+BUILT_MODULE_NAME[0]="apple-bce"
+DEST_MODULE_LOCATION[0]="/kernel/drivers/misc"
+AUTOINSTALL="yes"
+DK
   cp -r /tmp/apple-bce "/usr/src/apple-bce-$V"
   dkms add -m apple-bce -v "$V" >/dev/null 2>&1 || true
   for k in $KVERS; do
