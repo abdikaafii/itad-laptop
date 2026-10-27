@@ -1,5 +1,5 @@
 #!/bin/bash
-# build.sh - builds the ITAD laptop boot ISO. Output: build/itad-laptop.iso
+# build.sh - builds the ITAD laptop boot ISO. Output: build/ITAD-LaptopSeal.iso
 #
 # v2 - "works on all laptop types":
 #   * Debian 13 (trixie): newer Linux kernel (6.12) + newer firmware, so
@@ -444,27 +444,27 @@ echo "== 5. Build =="
 lb build
 ISO="$(ls -1t live-image-*.hybrid.iso binary.hybrid.iso 2>/dev/null | head -n1 || true)"
 [ -n "$ISO" ] || { echo "ERROR: no ISO produced" >&2; exit 1; }
-mv -f "$ISO" itad-laptop.iso
-ls -lh itad-laptop.iso
+mv -f "$ISO" ITAD-LaptopSeal.iso
+ls -lh ITAD-LaptopSeal.iso
 
 echo "== 6. Add an empty ITAD_DATA partition for reports =="
 # A 300 MB FAT32 partition called ITAD_DATA is added to the image, so
 # every USB written from this ISO has a place to save reports (shown as a
 # separate drive in Windows). If this step fails, the normal ISO is kept.
 if command -v xorriso >/dev/null && command -v mkfs.vfat >/dev/null; then
-  rm -f itad_data.img itad-laptop-data.iso
+  rm -f itad_data.img ITAD-LaptopSeal-data.iso
   truncate -s 300M itad_data.img
   mkfs.vfat -F 32 -n ITAD_DATA itad_data.img >/dev/null
-  if xorriso -indev itad-laptop.iso -outdev itad-laptop-data.iso \
+  if xorriso -indev ITAD-LaptopSeal.iso -outdev ITAD-LaptopSeal-data.iso \
        -boot_image any replay \
        -append_partition 3 0x0c itad_data.img 2>&1 | tail -n 5; then
-    if [ -s itad-laptop-data.iso ]; then
-      mv -f itad-laptop-data.iso itad-laptop.iso
+    if [ -s ITAD-LaptopSeal-data.iso ]; then
+      mv -f ITAD-LaptopSeal-data.iso ITAD-LaptopSeal.iso
       echo "ITAD_DATA partition added"
     fi
   else
     echo "WARNING: could not add the ITAD_DATA partition (ISO kept as is)"
   fi
-  rm -f itad_data.img itad-laptop-data.iso
+  rm -f itad_data.img ITAD-LaptopSeal-data.iso
 fi
-ls -lh itad-laptop.iso
+ls -lh ITAD-LaptopSeal.iso

@@ -1,0 +1,71 @@
+# ITAD Toolkit - Ventoy boot menu theme
+desktop-image: "background.png"
+desktop-color: "#04121F"
+title-text: ""
+message-font: "DejaVu Sans Regular 16"
+message-color: "#EAF2FF"
+terminal-font: "DejaVu Sans Regular 16"
+
++ boot_menu {
+  left = 22%
+  top = 31%
+  width = 56%
+  height = 30%
+  item_font = "DejaVu Sans Bold 30"
+  item_color = "#C9D8EE"
+  selected_item_font = "DejaVu Sans Bold 30"
+  selected_item_color = "#FFFFFF"
+  item_height = 92
+  item_padding = 14
+  item_spacing = 18
+  icon_width = 64
+  icon_height = 64
+  item_icon_space = 26
+  selected_item_pixmap_style = "select_*.png"
+  scrollbar = false
+}
+
++ progress_bar {
+  id = "__timeout__"
+  text = "@TIMEOUT_NOTIFICATION_SHORT@"
+  left = 75%
+  width = 20%
+  top = 90%
+  height = 24
+  font = "DejaVu Sans Regular 16"
+  text_color = "#FBBF24"
+  bar_style = "*"
+  highlight_style = "*"
+}
+
++ hbox {
+  left = 3%
+  top = 95%-22
+  width = 40%
+  height = 22
+  + label { text = "@VTOY_HOTKEY_TIP@" color = "#8EA6C8" font = "DejaVu Sans Regular 16" align = "left" }
+}
+
++ hbox {
+  left = 3%
+  top = 95%-50
+  width = 30%
+  height = 22
+  + label { text = "@VTOY_MEM_DISK@" color = "#F87171" font = "DejaVu Sans Regular 16" align = "left" }
+}
+
++ hbox {
+  left = 3%+300
+  top = 95%-50
+  width = 30%
+  height = 22
+  + label { text = "@VTOY_GRUB2_MODE@" color = "#F87171" font = "DejaVu Sans Regular 16" align = "left" }
+}
+
++ hbox {
+  left = 3%+600
+  top = 95%-50
+  width = 30%
+  height = 22
+  + label { text = "@VTOY_ISO_RAW@" color = "#F87171" font = "DejaVu Sans Regular 16" align = "left" }
+}

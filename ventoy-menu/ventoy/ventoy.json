@@ -1,0 +1,73 @@
+{
+  "control": [
+    {
+      "VTOY_DEFAULT_MENU_MODE": "0"
+    },
+    {
+      "VTOY_SECONDARY_BOOT_MENU": "0"
+    },
+    {
+      "VTOY_FILT_DOT_UNDERSCORE_FILE": "1"
+    },
+    {
+      "VTOY_MENU_LANGUAGE": "en_US"
+    }
+  ],
+  "theme": {
+    "file": "/ventoy/theme/itad/theme.txt",
+    "gfxmode": "max",
+    "display_mode": "GUI",
+    "fonts": [
+      "/ventoy/theme/itad/dvb30.pf2",
+      "/ventoy/theme/itad/dv20.pf2",
+      "/ventoy/theme/itad/dv16.pf2"
+    ]
+  },
+  "menu_alias": [
+    {
+      "image": "/ITAD-LaptopSeal.iso",
+      "alias": "LaptopSeal   -   Laptops and PCs"
+    },
+    {
+      "image": "/ITAD-PhoneSeal.iso",
+      "alias": "PhoneSeal   -   Phones and tablets"
+    },
+    {
+      "image": "/ITAD-SwitchSeal.iso",
+      "alias": "SwitchSeal   -   Cisco switches"
+    }
+  ],
+  "menu_class": [
+    {
+      "key": "ITAD-LaptopSeal",
+      "class": "laptop"
+    },
+    {
+      "key": "ITAD-PhoneSeal",
+      "class": "phone"
+    },
+    {
+      "key": "ITAD-SwitchSeal",
+      "class": "switch"
+    }
+  ],
+  "menu_tip": {
+    "left": "22%",
+    "top": "66%",
+    "color": "#8EA6C8",
+    "tips": [
+      {
+        "image": "/ITAD-LaptopSeal.iso",
+        "tip": "Absolute and enrolment check, secure wipe, component tests, signed certificate"
+      },
+      {
+        "image": "/ITAD-PhoneSeal.iso",
+        "tip": "iPhone, iPad, Android: lock checks, tests in the browser, erase, certificate"
+      },
+      {
+        "image": "/ITAD-SwitchSeal.iso",
+        "tip": "Console cable: hardware and port tests, configuration wipe, certificate"
+      }
+    ]
+  }
+}
