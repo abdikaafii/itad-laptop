@@ -155,7 +155,7 @@ try:
 except Exception:
     TZ = None
 
-VERSION = "1.9.1"
+VERSION = "1.10.0"
 TOOLS_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # --- THESE ARE THE FILES THIS GUI WILL RUN ---
@@ -993,6 +993,209 @@ def load_check_module():
         return None
 
 
+# ---------------------------------------------------------------------------
+# v1.10: part details for the certificate (model + serial of each part),
+# chassis type, graphics card, company name, per-drive erasure records.
+# ---------------------------------------------------------------------------
+CHASSIS = {"3": "Desktop", "4": "Low profile desktop", "5": "Pizza box",
+           "6": "Mini tower", "7": "Tower", "8": "Portable", "9": "Laptop",
+           "10": "Notebook", "11": "Handheld", "12": "Docking station",
+           "13": "All-in-one", "14": "Sub-notebook", "15": "Space-saving",
+           "16": "Lunch box", "17": "Main server chassis", "23": "Rack mount",
+           "24": "Sealed-case PC", "30": "Tablet", "31": "Convertible",
+           "32": "Detachable", "33": "IoT gateway", "34": "Embedded PC",
+           "35": "Mini PC", "36": "Stick PC"}
+
+
+def _read(path):
+    try:
+        with open(path, errors="replace") as f:
+            return f.read().strip()
+    except OSError:
+        return ""
+
+
+def _lspci():
+    """[(class, 'Vendor Device')] from lspci -mm."""
+    rc, out = run_cmd(["lspci", "-mm"])
+    res = []
+    for ln in (out or "").splitlines():
+        parts = re.findall(r'"([^"]*)"', ln)
+        if len(parts) >= 3:
+            vend = re.sub(r"\s*\[[^\]]*\]", "", parts[1])
+            dev = re.sub(r"\s*\[[^\]]*\]", "", parts[2])
+            res.append((parts[0], ("%s %s" % (
+                vend.replace(" Corporation", "").replace(", Inc.", "")
+                .replace(" Inc.", ""), dev)).strip()))
+    return res
+
+
+def _pci_name(sysdev):
+    """'Intel Wi-Fi 6 AX201' for a /sys/class/net/X/device link."""
+    try:
+        addr = os.path.basename(os.path.realpath(sysdev))
+    except OSError:
+        return ""
+    if re.match(r"^[0-9a-f]{4}:[0-9a-f]{2}:", addr):
+        rc, out = run_cmd(["lspci", "-mm", "-s", addr])
+        parts = re.findall(r'"([^"]*)"', out or "")
+        if len(parts) >= 3:
+            return ("%s %s" % (parts[1].replace(" Corporation", ""),
+                               parts[2])).strip()
+    # USB adapter: read the USB product name
+    up = os.path.realpath(sysdev)
+    for _ in range(3):
+        up = os.path.dirname(up)
+        prod = _read(os.path.join(up, "product"))
+        if prod:
+            return ("%s %s" % (_read(os.path.join(up, "manufacturer")),
+                               prod)).strip()
+    return ""
+
+
+def hardware_ids(disks=None, screen=None):
+    """Model and serial / MAC of each part, for the certificate."""
+    ids = {}
+    ct = _read("/sys/class/dmi/id/chassis_type")
+    ids["chassis"] = CHASSIS.get(ct, ("type %s" % ct) if ct else "")
+    gpus = [n for c, n in _lspci() if c.startswith(
+        ("VGA compatible", "3D controller", "Display controller"))]
+    ids["gpu"] = "; ".join(gpus)
+    parts = {}
+
+    def join(*xs):
+        return "  |  ".join(x for x in xs if x)
+    # battery
+    for b in sorted(glob.glob("/sys/class/power_supply/BAT*")):
+        parts["Battery"] = join(
+            " ".join(x for x in (_read(b + "/manufacturer"),
+                                 _read(b + "/model_name")) if x),
+            _read(b + "/technology"),
+            ("S/N " + _read(b + "/serial_number"))
+            if _read(b + "/serial_number").strip("0 ") else "")
+        break
+    # network: Wi-Fi + Ethernet (name + MAC)
+    for n in sorted(os.listdir("/sys/class/net")) if os.path.isdir(
+            "/sys/class/net") else []:
+        base = "/sys/class/net/" + n
+        if not os.path.exists(base + "/device"):
+            continue
+        mac = _read(base + "/address").upper()
+        name = _pci_name(base + "/device")
+        if os.path.isdir(base + "/wireless") or os.path.exists(
+                base + "/phy80211"):
+            parts.setdefault("Wi-Fi", join(name, "MAC " + mac))
+        elif not n.startswith(("ww", "usb", "enx")):
+            parts.setdefault("Ethernet", join(name, "MAC " + mac))
+    # Bluetooth: controller address + chip
+    rc, out = run_cmd(["bluetoothctl", "list"])
+    m = re.search(r"Controller\s+([0-9A-Fa-f:]{17})\s+(.*)", out or "")
+    bt_chip = ""
+    rc2, lsu = run_cmd(["lsusb"])
+    for ln in (lsu or "").splitlines():
+        if "bluetooth" in ln.lower():
+            bt_chip = re.sub(r"^.*ID [0-9a-f:]{9}\s*", "", ln).strip()
+            break
+    if m or bt_chip:
+        parts["Bluetooth"] = join(bt_chip, ("MAC " + m.group(1).upper())
+                                  if m else "")
+    # webcam
+    for v in sorted(glob.glob("/sys/class/video4linux/video*")):
+        name = _read(v + "/name").split(":")[0]
+        up = os.path.realpath(v + "/device")
+        usb = {}
+        for _ in range(3):
+            if os.path.exists(os.path.join(up, "idVendor")):
+                for k in ("idVendor", "idProduct", "serial", "manufacturer"):
+                    usb[k] = _read(os.path.join(up, k))
+                break
+            up = os.path.dirname(up)
+        parts["Webcam"] = join(name, ("USB %s:%s" % (usb["idVendor"],
+                                                     usb["idProduct"]))
+                               if usb.get("idVendor") else "",
+                               ("S/N " + usb["serial"])
+                               if usb.get("serial") else "")
+        break
+    # sound chip (speakers and microphone)
+    codec = ""
+    for c in sorted(glob.glob("/proc/asound/card*/codec#*")):
+        first = _read(c).splitlines()
+        if first and first[0].startswith("Codec:"):
+            codec = first[0].split(":", 1)[1].strip()
+            if "hdmi" not in codec.lower():
+                break
+    if not codec:
+        codec = (_read("/proc/asound/cards").splitlines() or [""])[0]
+        codec = re.sub(r"^\s*\d+\s*\[[^\]]*\]:\s*", "", codec)
+    if codec:
+        parts["Speakers"] = parts["Microphone"] = codec
+    # drives
+    drv = []
+    for d in disks or []:
+        drv.append(join(" ".join(x for x in (d.get("model") or "",
+                                             ("%s GB" % d.get("size_gb"))
+                                             if d.get("size_gb") else "")
+                                 if x),
+                        ("S/N " + d["serial"]) if d.get("serial") else ""))
+    if drv:
+        parts["Drive Health"] = "; ".join(drv)
+    if screen:
+        parts["Screen"] = screen_text(screen)
+    ids["parts"] = parts
+    return ids
+
+
+def company_name(out_dir):
+    """First line of company.txt on the ITAD_DATA stick (USB B)."""
+    for d in (out_dir, os.path.dirname(os.path.abspath(__file__))):
+        t = _read(os.path.join(d or "", "company.txt"))
+        for ln in t.splitlines():
+            ln = ln.strip()
+            if ln and not ln.startswith("#"):
+                return ln[:80]
+    return ""
+
+
+METHOD_TEXT = {
+    "purge": ("Purge - drive firmware sanitize / secure erase", "Purge", 1),
+    "purge-format": ("Purge - NVMe secure format", "Purge", 1),
+    "crypto": ("Purge - cryptographic erase", "Purge", 1),
+    "clear": ("Clear - overwrite", "Clear", 1),
+    "random": ("Clear - random overwrite", "Clear", 1),
+    "clear-fallback": ("Clear - random overwrite (purge not supported)",
+                       "Clear", 1),
+    "dod": ("Clear - 3-pass overwrite (DoD 5220.22-M)", "Clear", 3),
+    "discard": ("Block discard (TRIM)", "", 1),
+}
+
+
+def erasure_records(rep_devices, tech, started, finished, job):
+    """One record per wiped drive, like a per-device erasure certificate."""
+    out = []
+    for i, d in enumerate(rep_devices or []):
+        ach = d.get("achieved") or "fail"
+        text, level, passes = METHOD_TEXT.get(
+            ach, (ach, "", 1) if ach != "fail" else ("-", "", 0))
+        ver = (d.get("verification") or {}).get("verified")
+        ok = ach != "fail"
+        status = ("Success" if ok and ver else
+                  "Erased - not verified" if ok else "Failed")
+        h = hashlib.sha256(("%s|%s|%s|%s|%s" % (
+            job, d.get("serial"), d.get("path"), finished, ach)).encode())
+        out.append({
+            "index": i, "path": d.get("path"), "model": d.get("model") or "",
+            "capacity_gb": d.get("size_gb"), "serial": d.get("serial") or "",
+            "passes": passes, "method": text, "level": level,
+            "standard": ("NIST SP 800-88 Rev. 2 %s  |  IEEE 2883-2022 %s" % (
+                level, "Purge" if level == "Purge" else "Clear"))
+            if level and ok else "",
+            "hidden_areas": d.get("hidden_areas") or {},
+            "verified": bool(ver), "status": status, "technician": tech,
+            "started": started, "finished": finished,
+            "erasure_id": "%d" % (int(h.hexdigest()[:12], 16) % 10**10)})
+    return out
+
+
 def quick_identity():
     mod = load_check_module()
     if mod:
@@ -1074,6 +1277,10 @@ def render_txt(rep):
                  ("RAM", rep["ram"]), ("Screen", rep.get("screen")),
                  ("Storage", rep["storage"])):
         add("%-14s: %s" % (k, v or "-"))
+    for k, v in (("Chassis", rep.get("chassis")),
+                 ("Graphics", rep.get("gpu"))):
+        if v:
+            add("%-14s: %s" % (k, v))
     add("")
     add("STAGES")
     add("%-14s: %s" % ("Absolute lock", rep["absolute"]))
@@ -1093,11 +1300,28 @@ def render_txt(rep):
                                                    ha.get("dco")))
     if rep.get("certificate"):
         add("   certificate sha256: %s" % rep["certificate"])
+    if rep.get("erasures"):
+        add("")
+        add("ERASURE RESULTS")
+        for e in rep["erasures"]:
+            add("  Device %d: %s  %s GB  S/N %s" % (
+                e["index"], e["model"] or "?", e["capacity_gb"],
+                e["serial"] or "-"))
+            add("    Method %s  |  passes %s  |  %s  |  Erasure ID %s" % (
+                e["method"], e["passes"], e["status"], e["erasure_id"]))
+            if e.get("standard"):
+                add("    " + e["standard"])
+    if rep.get("company") and rep.get("wipe_state") == "WIPED":
+        add("")
+        add("Certified by %s" % rep["company"])
     add("")
     add("COMPONENTS")
     for t in rep["tests"]:
         note = "; ".join(t.get("notes") or [])
         add("%-14s %-6s %s" % (t.get("component"), t.get("status"), note))
+        pid = (rep.get("part_ids") or {}).get(t.get("component"))
+        if pid:
+            add("%-14s        %s" % ("", pid))
     add("")
     add("OBSERVATIONS")
     for k, v in obs_lines(rep.get("observations")):
@@ -1450,31 +1674,47 @@ def write_pdf(path, rep):
 
     def header_footer(c, doc):
         c.saveState()
-        # header band
-        c.setFillColor(NAVY_C)
+        # header band (same banner as the LaptopSeal window)
+        c.setFillColor(colors.HexColor("#07334A"))
         c.rect(0, H - 30 * mm, W, 30 * mm, stroke=0, fill=1)
-        c.setFillColor(BLUE_C)
-        c.rect(0, H - 30 * mm, W, 1.2 * mm, stroke=0, fill=1)
-        c.setFont("Helvetica-Bold", 26)
+        c.setFillColor(colors.HexColor("#0A4560"))
+        c.rect(0, H - 30 * mm, W, 1.0 * mm, stroke=0, fill=1)
+        sq, gp = 3.2 * mm, 0.7 * mm
+        x0, y0 = 14 * mm, H - 9 * mm
+        for r, line in enumerate(TICK_TILES):
+            for k, ch in enumerate(line):
+                if ch in TILE_COLS:
+                    c.setFillColor(colors.HexColor(TILE_COLS[ch]))
+                    c.rect(x0 + k * (sq + gp), y0 - (r + 1) * sq - r * gp,
+                           sq, sq, stroke=0, fill=1)
+        tx = x0 + 4 * (sq + gp) + 4 * mm
+        c.setFont("Helvetica-Bold", 24)
         c.setFillColor(colors.white)
-        c.drawString(16 * mm, H - 17 * mm, "IT")
-        c.setFillColor(BLUE_C)
-        c.drawString(16 * mm + c.stringWidth("IT", "Helvetica-Bold", 26),
-                     H - 17 * mm, "AD")
-        c.setFont("Helvetica", 7.5)
+        c.drawString(tx, H - 18 * mm, "IT")
         c.setFillColor(CYAN_C)
-        c.drawString(16.5 * mm, H - 23 * mm,
-                     "L A P T O P S E A L   -   S E C U R E  •  T E S T  •  "
-                     "C E R T I F Y")
+        wit = c.stringWidth("IT", "Helvetica-Bold", 24)
+        c.drawString(tx + wit, H - 18 * mm, "AD")
+        wad = c.stringWidth("ITAD", "Helvetica-Bold", 24)
+        c.setFillColor(colors.white)
+        c.setFont("Helvetica-Bold", 10)
+        c.drawString(tx + wad + 2.5 * mm, H - 18 * mm, "LAPTOPSEAL")
+        c.setFont("Helvetica", 7.2)
+        c.setFillColor(colors.HexColor("#BFD3F2"))
+        c.drawString(tx, H - 24 * mm, "Certified Automated Erasure & "
+                                      "Device Testing")
+        for k, ch in enumerate("yoct"):
+            c.setFillColor(colors.HexColor(TILE_COLS[ch]))
+            c.rect(W - (4 - k) * 4.4 * mm, H - 30 * mm, 3.6 * mm, 3.6 * mm,
+                   stroke=0, fill=1)
         c.setFillColor(colors.white)
         c.setFont("Helvetica-Bold", 12)
-        c.drawRightString(W - 16 * mm, H - 15 * mm,
+        c.drawRightString(W - 16 * mm, H - 13 * mm,
                           "Certificate of Data Erasure")
         c.setFont("Helvetica", 8.5)
-        c.setFillColor(colors.HexColor("#B9C8DE"))
-        c.drawRightString(W - 16 * mm, H - 20.5 * mm,
+        c.setFillColor(colors.HexColor("#BFD3F2"))
+        c.drawRightString(W - 16 * mm, H - 18.5 * mm,
                           "and Hardware Test Report")
-        c.drawRightString(W - 16 * mm, H - 25 * mm,
+        c.drawRightString(W - 16 * mm, H - 23 * mm,
                           "Job %s   •   Serial %s" % (rep["job_id"],
                                                      rep["serial"]))
         # footer
@@ -1539,7 +1779,47 @@ def write_pdf(path, rep):
     top.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
                              ("LEFTPADDING", (0, 0), (0, 0), 0),
                              ("ALIGN", (2, 0), (2, 0), "CENTER")]))
-    el += [top, Spacer(1, 5 * mm)]
+    el += [top, Spacer(1, 3 * mm)]
+    who = rep.get("company") or "the operator named below"
+    if rep.get("wipe_state") == "WIPED":
+        stmt = ("<b>We hereby certify</b> that %s has securely erased every "
+                "storage device listed in this certificate with ITAD "
+                "LaptopSeal, following NIST SP 800-88 Rev. 2 and IEEE "
+                "2883-2022, and has verified the result by reading the "
+                "drives back. This certificate is digitally signed; its "
+                "fingerprint is kept for audit." % esc(who))
+    else:
+        stmt = ("This report records the checks and tests carried out by %s "
+                "with ITAD LaptopSeal. <b>No completed data erasure is "
+                "certified in this report</b> (wipe: %s)." % (
+                    esc(who), esc(rep.get("wipe_state"))))
+    st_t = Table([[Paragraph(stmt, ps("stmt", 8.4, color=INK, lead=11.5))]],
+                 colWidths=[FW])
+    st_t.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, -1), SOFT),
+                              ("LINEBEFORE", (0, 0), (0, -1), 2.2, BLUE_C),
+                              ("TOPPADDING", (0, 0), (-1, -1), 5),
+                              ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+                              ("LEFTPADDING", (0, 0), (-1, -1), 8)]))
+    # barcodes (asset ID and serial number), like a unit label
+    bcs = []
+    try:
+        from reportlab.graphics.barcode import code128
+        for lab, val in (("ASSET ID", rep.get("asset_id")),
+                         ("SERIAL NUMBER", rep.get("serial"))):
+            val = str(val or "").strip()
+            if val and val != "UNKNOWN":
+                bc = code128.Code128(val, barHeight=9 * mm,
+                                     barWidth=0.33 * mm, humanReadable=False)
+                bcs.append([Paragraph("%s: <b>%s</b>" % (lab, esc(val)),
+                                      s_txt), bc])
+    except Exception:
+        bcs = []
+    el += [st_t, Spacer(1, 4 * mm)]
+    if bcs:
+        bt = Table([bcs], colWidths=[FW / len(bcs)] * len(bcs))
+        bt.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "TOP"),
+                                ("LEFTPADDING", (0, 0), (-1, -1), 0)]))
+        el += [bt, Spacer(1, 4 * mm)]
 
     # ---- device + job details (two columns of key / value) ----
     def kv_table(pairs, cols=2):
@@ -1568,6 +1848,8 @@ def write_pdf(path, rep):
     el += [Paragraph("Device and job", s_h), Spacer(1, 2 * mm),
            kv_table([("Make / model", rep["make_model"]),
                      ("Serial number", rep["serial"]),
+                     ("Chassis type", rep.get("chassis")),
+                     ("Graphics", rep.get("gpu")),
                      ("Job ID", rep["job_id"]),
                      ("Asset ID", rep["asset_id"]),
                      ("CPU", rep["cpu"]), ("RAM", rep["ram"]),
@@ -1603,7 +1885,55 @@ def write_pdf(path, rep):
     el += [Paragraph("Security checks and data wipe", s_h),
            Spacer(1, 2 * mm), sec]
     drows = []
-    for d in rep.get("wipe_devices") or []:
+    for e in rep.get("erasures") or []:
+        stc = {"Success": "#13774D", "Failed": "#B3261E"}.get(e["status"],
+                                                              "#8A5A00")
+        cells = [
+            [Paragraph("DEVICE %d" % e["index"], s_key),
+             Paragraph("<b>%s</b>" % esc(e["model"] or "?"), s_txt),
+             Paragraph("ERASURE ID", s_key),
+             Paragraph("<b>%s</b>" % esc(e["erasure_id"]), s_txt)],
+            [Paragraph("CAPACITY", s_key),
+             Paragraph("%s GB" % esc(e["capacity_gb"]), s_txt),
+             Paragraph("STATUS", s_key),
+             Paragraph('<font color="%s"><b>%s</b></font>' % (
+                 stc, esc(e["status"])), s_txt)],
+            [Paragraph("SERIAL NUMBER", s_key),
+             Paragraph(esc(e["serial"]), s_txt),
+             Paragraph("TECHNICIAN", s_key),
+             Paragraph(esc(e["technician"]), s_txt)],
+            [Paragraph("METHOD", s_key), Paragraph(esc(e["method"]), s_txt),
+             Paragraph("PASSES", s_key), Paragraph(esc(e["passes"]), s_txt)],
+            [Paragraph("STARTED", s_key), Paragraph(esc(e["started"]), s_txt),
+             Paragraph("FINISHED", s_key),
+             Paragraph(esc(e["finished"]), s_txt)]]
+        ha = e.get("hidden_areas") or {}
+        extra = []
+        if ha.get("checked"):
+            extra.append("Hidden areas: HPA %s, DCO %s" % (
+                esc(ha.get("hpa")), esc(ha.get("dco"))))
+        if e.get("standard"):
+            extra.append("<u>Erasure is compliant with %s</u>" %
+                         esc(e["standard"]))
+        if extra:
+            cells.append([Paragraph("<br/>".join(extra), s_txt), "", "", ""])
+        et = Table(cells, colWidths=[28 * mm, FW / 2 - 28 * mm, 26 * mm,
+                                     FW / 2 - 26 * mm])
+        sty = [("BOX", (0, 0), (-1, -1), 0.6, LINE),
+               ("INNERGRID", (0, 0), (-1, -1), 0.3, LINE),
+               ("BACKGROUND", (0, 0), (0, -1), SOFT),
+               ("BACKGROUND", (2, 0), (2, -1), SOFT),
+               ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+               ("TOPPADDING", (0, 0), (-1, -1), 2.5),
+               ("BOTTOMPADDING", (0, 0), (-1, -1), 3)]
+        if extra:
+            sty += [("SPAN", (0, len(cells) - 1), (-1, len(cells) - 1)),
+                    ("BACKGROUND", (0, len(cells) - 1), (-1, len(cells) - 1),
+                     colors.white)]
+        et.setStyle(TableStyle(sty))
+        el.append(KeepTogether([Spacer(1, 2 * mm), et]))
+    for d in ([] if rep.get("erasures") else
+              (rep.get("wipe_devices") or [])):
         ver = (d.get("verification") or {}).get("verified")
         ha = d.get("hidden_areas") or {}
         txt = "<b>%s</b>  %s   •   method <b>%s</b>   •   verified <b>%s</b>" % (
@@ -1628,9 +1958,10 @@ def write_pdf(path, rep):
                                 ("TOPPADDING", (0, 0), (-1, -1), 3),
                                 ("BOTTOMPADDING", (0, 0), (-1, -1), 4)]))
         el.append(dt)
-    el.append(Paragraph("Erasure follows NIST SP 800-88 (Purge where the "
-                        "drive supports it, otherwise Clear) and is checked "
-                        "by reading the drive back.", s_small))
+    el.append(Paragraph("Erasure follows NIST SP 800-88 Rev. 2 and IEEE "
+                        "2883-2022 (Purge where the drive supports it, "
+                        "otherwise Clear) and is checked by reading the "
+                        "drive back.", s_small))
     el.append(Spacer(1, 5 * mm))
 
     # ---- components ----
@@ -1638,7 +1969,8 @@ def write_pdf(path, rep):
     fitted = [t for t in tests if t.get("status") != NOT_FITTED]
     good = sum(1 for t in fitted if t.get("status") == "PASS")
     rows = [[Paragraph("COMPONENT", s_key), Paragraph("RESULT", s_key),
-             Paragraph("DETAILS", s_key)]]
+             Paragraph("DETAILS", s_key), Paragraph("PART / SERIAL", s_key)]]
+    pids = rep.get("part_ids") or {}
     style = [("BOX", (0, 0), (-1, -1), 0.6, LINE),
              ("LINEBELOW", (0, 0), (-1, -1), 0.4, LINE),
              ("BACKGROUND", (0, 0), (-1, 0), SOFT),
@@ -1653,12 +1985,18 @@ def write_pdf(path, rep):
                      Paragraph('<font color="%s"><b>%s</b></font>' % (
                          STATUS_FG.get(stt, "#5B6B84"), label),
                          ps("st", 8.2, True, align=1)),
-                     Paragraph(esc("; ".join(x.get("notes") or []) or "-"),
-                               s_txt)])
+                     Paragraph(esc("; ".join(x.get("notes") or []) or "-") +
+                               ('<br/><font size="6.6" color="#5B6B84">'
+                                "%s%s</font>" % (esc(x.get("time")), (
+                                    " (%s)" % esc(x.get("by")))
+                                    if x.get("by") else "")
+                                if x.get("time") else ""), s_txt),
+                     Paragraph(esc(pids.get(x.get("component"), "")),
+                               ps("pid", 7.4, color=GREY))])
         style.append(("BACKGROUND", (1, n), (1, n),
                       colors.HexColor(STATUS_BG.get(stt, "#ECEFF4"))))
-    ct = Table(rows, colWidths=[30 * mm, 18 * mm, FW - 48 * mm],
-               repeatRows=1)
+    ct = Table(rows, colWidths=[27 * mm, 16 * mm, (FW - 43 * mm) * .52,
+                                (FW - 43 * mm) * .48], repeatRows=1)
     ct.setStyle(TableStyle(style))
     el += [Paragraph("Component tests  -  %d of %d passed" % (
         good, len(fitted)), s_h), Spacer(1, 2 * mm), ct,
@@ -3668,6 +4006,10 @@ class App:
     def tests_done(self, rc):
         data = load_json(self.p_test) or {}
         self.s["auto"] = data.get("results") or []
+        stamp = now().strftime("%Y-%m-%d %H:%M:%S")
+        for r in self.s["auto"]:
+            r.setdefault("time", stamp)
+            r.setdefault("by", self.tech())
         got = {}
         for r in self.s["auto"]:
             got[r.get("component")] = r
@@ -3770,6 +4112,8 @@ class App:
                 self.finish_manual(comp, status, [msg])
             else:
                 self.s.setdefault("override", {})[comp] = {
+                    "time": now().strftime("%Y-%m-%d %H:%M:%S"),
+                    "by": self.tech(),
                     "status": status, "note": msg}
                 self.set_row(comp, status,
                              self.result_detail(cur or {}))
@@ -3796,7 +4140,9 @@ class App:
     # ---------- on-screen tests ----------
     def finish_manual(self, comp, status, notes):
         self.s["manual"][comp] = {"component": comp, "status": status,
-                                  "notes": notes, "details": {}}
+                                  "notes": notes, "details": {},
+                                  "time": now().strftime("%Y-%m-%d %H:%M:%S"),
+                                  "by": self.tech()}
         self.set_row(comp, status)
 
     def manual_screen(self):
@@ -5023,6 +5369,7 @@ class App:
                 t["notes"] = [ov["note"] + " (automatic result was %s)" %
                               t.get("status", "?")] + list(t.get("notes") or [])
                 t["status"] = ov["status"]
+                t["time"], t["by"] = ov.get("time"), ov.get("by")
             out.append(t)
         return out
 
@@ -5044,6 +5391,11 @@ class App:
                               "customer or resale use")
         er = chk.get("autopilot_result", "?")
         obs = dict(self.read_observations())
+        try:
+            hw = hardware_ids(self.disks, self.screen)
+        except Exception as e:
+            hw = {"chassis": "", "gpu": "", "parts": {},
+                  "error": str(e)[:100]}
         return {
             "tool": "laptop_window.py", "version": VERSION,
             "time": now().strftime("%Y-%m-%d %H:%M:%S") + " (Europe/Dublin)",
@@ -5068,6 +5420,14 @@ class App:
             "bios": ("%s %s" % (i.get("bios_vendor", ""),
                                 i.get("bios_version", ""))).strip(),
             "boot_mode": i.get("boot_mode", ""),
+            "chassis": hw.get("chassis", ""),
+            "gpu": hw.get("gpu", ""),
+            "part_ids": hw.get("parts", {}),
+            "company": company_name(self.out_dir),
+            "erasures": erasure_records(
+                wipe.get("devices") or [], self.tech(),
+                fmt_time(self.s.get("wipe_start")),
+                fmt_time(self.s.get("wipe_end")), self.job()),
             "absolute": (chk.get("absolute_result", "?") if chk else
                          "NOT CHECKED (TEST MODE)"),
             "enrolment": ({"CLEAN": "CLEAN", "BLOCKED": "ACTIVE",
