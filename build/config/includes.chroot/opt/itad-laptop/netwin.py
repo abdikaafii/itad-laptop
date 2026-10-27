@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
 netwin.py - ITAD network window (Wi-Fi list + password), shared by
-LaptopSeal and SwitchSeal (v1.0.0). PhoneSeal has the same window plus the
+LaptopSeal and SwitchSeal (v1.0.1).
+v1.0.1: when no Wi-Fi is found the window says the real reason. PhoneSeal has the same window plus the
 station hotspot.
 
     from netwin import NetworkWindow, StatusPoller
@@ -215,7 +216,9 @@ class NetworkWindow:
         self.w.run(net.summary, done)
 
     def scan(self):
-        self.say("Looking for Wi-Fi networks...")
+        self.say("Looking for Wi-Fi networks (up to 20 seconds)...")
+        self.lb.delete(0, "end")
+        self.lb.insert("end", "  searching...")
 
         def done(r):
             if not self.alive():
@@ -231,15 +234,22 @@ class NetworkWindow:
                 self.say("%d network%s found. * = connected now." % (
                     n, "" if n == 1 else "s"))
             else:
-                self.say("No Wi-Fi found: this computer has no working Wi-Fi "
-                         "card (or it is switched off). Use a network cable.",
-                         WARN)
+                self.lb.insert("end", "  (no Wi-Fi networks found)")
+                self.say("No Wi-Fi found - checking why...", WARN)
+                self.w.run(net.wifi_problem, self.show_problem)
         self.w.run(net.scan, done)
+
+    def show_problem(self, r):
+        text = "No Wi-Fi found." if isinstance(r, Exception) else r
+        self.say(text, WARN)
 
     def connect(self):
         sel = self.lb.curselection()
         if not sel:
             self.say("Tap a network in the list first.", WARN)
+            return
+        if sel[0] >= len(self.nets):
+            self.say("No Wi-Fi network to connect to.", WARN)
             return
         n = self.nets[sel[0]]
         if n["secure"] and not self.v_pw.get():

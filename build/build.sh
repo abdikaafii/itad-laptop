@@ -54,7 +54,7 @@ mkdir -p "$CFG/package-lists"
 rm -f "$CFG"/package-lists/repo-*.list.chroot
 printf '%s\n' plymouth plymouth-themes xorg xinit openbox xterm python3 \
   python3-tk python3-reportlab python3-pil sudo util-linux x11-xserver-utils \
-  ntfs-3g alsa-utils network-manager smartmontools dmidecode hdparm \
+  ntfs-3g alsa-utils network-manager wpasupplicant smartmontools dmidecode hdparm \
   nvme-cli pciutils usbutils lshw iw rfkill parted fonts-dejavu-core zstd \
   bluez python3-cryptography ffmpeg v4l-utils firmware-sof-signed alsa-ucm-conf \
   dosfstools exfatprogs \
@@ -357,7 +357,7 @@ chmod 0440 "$INC/etc/sudoers.d/live-nopasswd"
 A="$INC/opt/itad-laptop"; mkdir -p "$A"
 for f in "$INC"/opt/*.py "$INC"/opt/*.sh; do [ -f "$f" ] && cp -f "$f" "$A/"; done
 ls -1 "$A"
-for n in laptop_window.py laptop_check.py laptop_wipe.py laptop_test.py itad_run.py launch.sh itad_storage.sh; do
+for n in laptop_window.py laptop_check.py laptop_wipe.py laptop_test.py itad_run.py launch.sh itad_storage.sh net.py netwin.py; do
   [ -f "$A/$n" ] || { echo "ERROR: $n missing" >&2; exit 1; }
 done
 chmod +x "$A"/*.sh "$A"/*.py
