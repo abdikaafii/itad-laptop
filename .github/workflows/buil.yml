@@ -53,6 +53,8 @@ jobs:
           echo "::notice title=ISO::size ${size} bytes | ${data:-no ITAD_DATA line} | partitions: ${parts}"
           skipped=$(grep -m1 'ITAD extra packages SKIPPED' build.log | cut -c1-900)
           echo "::notice title=Packages::${skipped:-no skipped-packages line}"
+          mac=$(grep -m1 'ITAD Mac drivers' build.log | cut -c1-900)
+          echo "::notice title=Mac drivers::${mac:-no Mac driver line}"
           err=$(grep -E '^E: |ERROR' build.log | head -n3 | tr '\n' ' ' | cut -c1-900)
           [ -n "$err" ] && echo "::warning title=Errors::${err}" || true
 
