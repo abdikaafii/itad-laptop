@@ -155,7 +155,7 @@ try:
 except Exception:
     TZ = None
 
-VERSION = "1.10.1"
+VERSION = "1.10.2"
 TOOLS_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # --- THESE ARE THE FILES THIS GUI WILL RUN ---
@@ -2168,30 +2168,40 @@ def draw_icon(c, kind, cx, cy, s, color, width=2):
         L(cx - h * .6, cy, cx + h * .6, cy)
         L(cx, cy - h * .6, cx, cy + h * .6)
     elif kind == "gear":
-        r1, r2 = h * .45, h * .72
+        # v1.10.2: solid teeth + ring + clear hole (reads well when small)
+        r1, r2 = h * .50, h * .80
         for k in range(8):
-            a = math.radians(k * 45)
+            a = math.radians(k * 45 + 22.5)
             L(cx + r1 * math.cos(a), cy + r1 * math.sin(a),
-              cx + r2 * math.cos(a), cy + r2 * math.sin(a), width=w + 2)
+              cx + r2 * math.cos(a), cy + r2 * math.sin(a),
+              width=max(3, int(s * .16)))
         c.create_oval(cx - r1 - 1, cy - r1 - 1, cx + r1 + 1, cy + r1 + 1,
-                      outline=color, width=w, fill=c["bg"])
-        c.create_oval(cx - h * .18, cy - h * .18, cx + h * .18, cy + h * .18,
-                      outline=color, width=w)
+                      outline=color, fill=color, width=1)
+        c.create_oval(cx - h * .22, cy - h * .22, cx + h * .22, cy + h * .22,
+                      outline=color, fill=c["bg"], width=1)
     elif kind == "info":
-        c.create_oval(cx - h * .75, cy - h * .75, cx + h * .75, cy + h * .75,
+        # v1.10.2: ring, round dot and a thick stem (was hard to read)
+        c.create_oval(cx - h * .8, cy - h * .8, cx + h * .8, cy + h * .8,
                       outline=color, width=w)
-        L(cx, cy - h * .05, cx, cy + h * .4)
-        c.create_oval(cx - 1.5, cy - h * .38 - 1.5, cx + 1.5, cy - h * .38 + 1.5,
+        d = max(2.0, s * .07)
+        c.create_oval(cx - d, cy - h * .42 - d, cx + d, cy - h * .42 + d,
                       fill=color, outline=color)
-    elif kind == "wifi":
-        for r in (0.95, 0.62, 0.30):
+        L(cx, cy - h * .05, cx, cy + h * .45, width=w)
+    elif kind in ("wifi", "wifi_off"):
+        # v1.10.2: three arcs that share one centre (the dot), like the
+        # usual Wi-Fi sign. "wifi_off" adds a slash.
+        by = cy + h * .55
+        for r in (1.05, 0.70, 0.36):
             rr = h * r
-            c.create_arc(cx - rr, cy - rr + h * .45, cx + rr,
-                         cy + rr + h * .45, start=45, extent=90,
-                         style="arc", outline=color, width=w)
-        d = max(2, w)
-        c.create_oval(cx - d, cy + h * .45 - d, cx + d, cy + h * .45 + d,
-                      fill=color, outline=color)
+            c.create_arc(cx - rr, by - rr, cx + rr, by + rr, start=45,
+                         extent=90, style="arc", outline=color,
+                         width=w + 1)
+        d = max(2.0, s * .08)
+        c.create_oval(cx - d, by - d, cx + d, by + d, fill=color,
+                      outline=color)
+        if kind == "wifi_off":
+            L(cx - h * .75, cy - h * .65, cx + h * .75, cy + h * .7,
+              width=w + 1)
     elif kind == "power":
         c.create_arc(cx - h * .65, cy - h * .6, cx + h * .65, cy + h * .7,
                      start=120, extent=300, style="arc", outline=color, width=w)
@@ -2607,6 +2617,34 @@ class App:
         box = tk.Frame(head, bg=BANNER2, highlightbackground="#2E6E8E",
                        highlightthickness=1)
         box.pack(side="right", padx=p(26))
+        # v1.10.2: network status in the top corner (icon + name), click
+        # it to open the Wi-Fi window. Was in the footer and the left menu.
+        s0 = tk.Frame(box, bg=BANNER2, cursor="hand2")
+        s0.pack(side="left", padx=(p(14), p(12)), pady=p(8))
+        self.h_net_i = tk.Canvas(s0, width=p(30), height=p(30), bg=BANNER2,
+                                 highlightthickness=0, cursor="hand2")
+        self.h_net_i.pack(side="left", padx=(0, p(8)))
+        s0t = tk.Frame(s0, bg=BANNER2, cursor="hand2")
+        s0t.pack(side="left")
+        self.h_net_t = tk.Label(s0t, text="Network", font=self.F(9),
+                                fg="#BFD3F2", bg=BANNER2, cursor="hand2")
+        self.h_net_t.pack(anchor="w")
+        self.h_net = tk.Label(s0t, text="Checking...", font=self.F(10, True),
+                              fg=MUTED, bg=BANNER2, cursor="hand2")
+        self.h_net.pack(anchor="w")
+        for wdg in (s0, self.h_net_i, s0t, self.h_net_t, self.h_net):
+            wdg.bind("<Button-1>", lambda e: self.open_network())
+        tk.Frame(box, bg="#2E6E8E", width=1).pack(side="left", fill="y",
+                                                  pady=p(8))
+        self.paint_net("", "none")
+        self.f_net = tk.Label(root, text="")       # hidden, fed by netwin
+        try:
+            from netwin import StatusPoller
+            self.net_poller = StatusPoller(root, self.f_net, prefix="")
+            self.root.after(1000, self.watch_net)
+        except Exception as e:
+            self.h_net.configure(text="Not available", fg=WARN)
+            sys.stderr.write("network status not available: %s\n" % e)
         s1 = tk.Frame(box, bg=BANNER2)
         s1.pack(side="left", padx=(p(16), p(16)), pady=p(8))
         tk.Label(s1, text="USB B (reports)", font=self.F(9), fg="#BFD3F2",
@@ -2652,16 +2690,6 @@ class App:
                                 fill=TILE_COLS[ch], outline="")
         tk.Label(foot, text="LaptopSeal v%s" % VERSION, font=self.F(9),
                  fg=MUTED, bg=BG).pack(side="left", pady=self.px(8))
-        self.f_net = tk.Label(foot, text="Network: checking...",
-                              font=self.F(9), fg=MUTED, bg=BG,
-                              cursor="hand2")
-        self.f_net.pack(side="left", padx=self.px(30))
-        self.f_net.bind("<Button-1>", lambda e: self.open_network())
-        try:
-            from netwin import StatusPoller
-            StatusPoller(root, self.f_net)
-        except Exception as e:
-            self.f_net.configure(text="Network: (not available: %s)" % e)
         tk.Label(foot, text="Better devices. A cleaner planet.",
                  font=self.F(10), fg=TEXT, bg=BG).pack(side="right",
                                                        padx=(0, self.px(30)))
@@ -2681,7 +2709,6 @@ class App:
                 ("job", "New Job", "plus", self.nav_new_job),
                 ("settings", "Settings", "gear", lambda: self.show("settings")),
                 ("about", "About", "info", lambda: self.show("about")),
-                ("network", "Wi-Fi / Network", "wifi", self.open_network),
                 ("power", "Shutdown", "power", self.power_off)):
             self.nav_items[key] = self.nav_item(side, text, ic, cmd)
 
@@ -2693,6 +2720,38 @@ class App:
         self.content.pack(fill="both", expand=True)
         self.content.grid_rowconfigure(0, weight=1)
         self.content.grid_columnconfigure(0, weight=1)
+
+    def paint_net(self, text, state):
+        """Top-corner network box: Wi-Fi icon coloured by the state."""
+        col = {"ok": OK, "hotspot": CYAN}.get(state, WARN)
+        c = self.h_net_i
+        c.delete("all")
+        s = self.px(30)
+        draw_icon(c, "wifi" if state in ("ok", "hotspot") else "wifi_off",
+                  s / 2.0, s / 2.0, s * .78, col, 2)
+        if state in ("ok", "hotspot"):
+            name, _, ip = text.partition("  ")
+            name = name.strip() or "Connected"
+            if len(name) > 22:
+                name = name[:21] + "..."
+            self.h_net_t.configure(text=ip.strip() or "Network")
+            self.h_net.configure(text=name, fg=col)
+        else:
+            self.h_net_t.configure(text="Network")
+            self.h_net.configure(text="No network" if text in ("", "No network")
+                                 else text, fg=col)
+
+    def watch_net(self):
+        """Copy what the netwin poller found into the top-corner box."""
+        try:
+            txt = self.f_net.cget("text")
+            st = getattr(self.net_poller, "state", "none")
+            if (txt, st) != getattr(self, "_net_last", None):
+                self._net_last = (txt, st)
+                self.paint_net(txt, st)
+        except Exception:
+            pass
+        self.root.after(1000, self.watch_net)
 
     def draw_logo(self, c, cx, cy, s):
         h = s / 2.0
