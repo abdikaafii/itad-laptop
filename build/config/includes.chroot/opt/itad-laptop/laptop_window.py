@@ -155,7 +155,7 @@ try:
 except Exception:
     TZ = None
 
-VERSION = "1.10.0"
+VERSION = "1.10.1"
 TOOLS_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # --- THESE ARE THE FILES THIS GUI WILL RUN ---
@@ -2423,7 +2423,18 @@ class App:
         sw, sh = root.winfo_screenwidth(), root.winfo_screenheight()
         if windowed:
             sw, sh = 1366, 768
-        self.sc = max(0.78, min(1.3, min(sw / 1600.0, sh / 900.0)))
+        # The layout is drawn for a 1600x900 screen and then shrunk or
+        # grown to fit. Small or square desktop monitors (1024x768,
+        # 1280x1024, 1440x900) need a smaller scale, so allow down to 0.55.
+        self.sc = max(0.55, min(1.3, min(sw / 1600.0, sh / 900.0)))
+        # Fix the font size: Tk turns "points" into pixels using the DPI the
+        # monitor reports, and old desktop monitors report odd values. That
+        # made text too big for its boxes. Always use 96 DPI so text and boxes
+        # grow and shrink together on every screen.
+        try:
+            root.tk.call("tk", "scaling", 96.0 / 72.0)
+        except Exception:
+            pass
         self._fonts = {}
         root.title("ITAD Laptop")
         root.configure(bg=BG)

@@ -115,6 +115,16 @@ for i in $(seq 1 30); do
 done
 
 # 4. Screen settings and hidden mouse pointer
+# 4a. Use each monitor's own best (native) resolution, so the picture is
+#     sharp and not stretched (old desktop monitors sometimes start at a
+#     lower or wrong-shape resolution).
+if command -v xrandr >/dev/null 2>&1 && [ -n "${DISPLAY:-}" ]; then
+    for OUT in $(xrandr --query 2>/dev/null | awk '/ connected/{print $1}'); do
+        xrandr --output "$OUT" --auto >>"$LOG" 2>&1 || true
+    done
+    sleep 1
+    log "screen: $(xrandr --query 2>/dev/null | awk '/\*/{print $1; exit}')"
+fi
 if command -v xset >/dev/null 2>&1; then
     xset s off 2>/dev/null
     xset -dpms 2>/dev/null
