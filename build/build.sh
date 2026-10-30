@@ -461,7 +461,7 @@ chmod 0440 "$INC/etc/sudoers.d/live-nopasswd"
 A="$INC/opt/itad-laptop"; mkdir -p "$A"
 for f in "$INC"/opt/*.py "$INC"/opt/*.sh; do [ -f "$f" ] && cp -f "$f" "$A/"; done
 ls -1 "$A"
-for n in laptop_window.py laptop_check.py laptop_wipe.py laptop_test.py itad_run.py launch.sh itad_storage.sh net.py netwin.py; do
+for n in laptop_window.py laptop_check.py laptop_wipe.py laptop_test.py itad_run.py launch.sh itad_storage.sh net.py netwin.py wifi_fix.sh; do
   [ -f "$A/$n" ] || { echo "ERROR: $n missing" >&2; exit 1; }
 done
 chmod +x "$A"/*.sh "$A"/*.py

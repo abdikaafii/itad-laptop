@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """
 netwin.py - ITAD network window (Wi-Fi list + password), shared by
-LaptopSeal and SwitchSeal (v1.0.1).
-v1.0.1: when no Wi-Fi is found the window says the real reason. PhoneSeal has the same window plus the
-station hotspot.
+LaptopSeal, PhoneSeal and SwitchSeal (v1.1.0).
+v1.1.0: ONE window for all tools. PhoneSeal opens it with hotspot=True,
+        which adds the "station Wi-Fi" part (start / stop).
+v1.0.1: when no Wi-Fi is found the window says the real reason.
 
     from netwin import NetworkWindow, StatusPoller
     NetworkWindow(tk, root, font=F, px=P)          # opens the window
+    NetworkWindow(tk, root, hotspot=True)           # + station Wi-Fi
     StatusPoller(root, label, prefix="Network: ")   # live status label
 
 Uses net.py (NetworkManager / nmcli). Never raises: errors are shown in
@@ -86,8 +88,10 @@ class StatusPoller:
 
 
 class NetworkWindow:
-    def __init__(self, tk, root, font=None, px=None, on_change=None):
+    def __init__(self, tk, root, font=None, px=None, on_change=None,
+                 hotspot=False):
         self.tk, self.root = tk, root
+        self.hotspot = hotspot
         self.F = font or _default_font
         self.P = px or (lambda n: int(n))
         self.on_change = on_change
@@ -178,6 +182,8 @@ class NetworkWindow:
             side="left", padx=P(6))
         self.button(bf, "Disconnect Wi-Fi", self.disconnect, "ghost").pack(
             side="left")
+        if self.hotspot:
+            self.build_hotspot(body)
         foot = tk.Frame(win, bg=BG)
         foot.pack(fill="x", padx=P(18), pady=(0, P(14)))
         self.button(foot, "Close", win.destroy).pack(side="right")
@@ -197,6 +203,56 @@ class NetworkWindow:
         win.lift()
         win.after(150, lambda: (win.lift(), win.focus_force()))
 
+    def build_hotspot(self, body):
+        """PhoneSeal: the station makes its own Wi-Fi for the phones."""
+        tk, P = self.tk, self.P
+        card = tk.Frame(body, bg=CARD, highlightbackground=BORDER,
+                        highlightthickness=1)
+        card.pack(fill="x", pady=(P(10), 0))
+        inner = tk.Frame(card, bg=CARD)
+        inner.pack(fill="x", padx=P(16), pady=P(12))
+        self.lbl(inner, "OR: STATION WI-FI (no router needed)", 9, True,
+                 fg=CYAN).pack(anchor="w")
+        self.lbl(inner, "The station makes its own Wi-Fi. The phone joins "
+                 "it by scanning the QR code on the test page. While it is "
+                 "on, the Wi-Fi list above stays empty.", 10,
+                 fg=MUTED).pack(anchor="w", pady=(P(2), 0))
+        self.hs_msg = self.lbl(inner, "", 11, fg=MUTED)
+        self.hs_msg.pack(anchor="w", pady=(P(4), 0))
+        bf = tk.Frame(inner, bg=CARD)
+        bf.pack(anchor="w", pady=(P(6), 0))
+        self.button(bf, "Start station Wi-Fi", self.hs_start).pack(
+            side="left")
+        self.button(bf, "Stop it", self.hs_stop, "ghost").pack(
+            side="left", padx=P(6))
+
+    def hs_say(self, r):
+        ok, text = r if not isinstance(r, Exception) else (False, str(r))
+        if self.alive():
+            self.hs_msg.configure(text=text, fg=OK if ok else BAD)
+        self.refresh_status()
+        if ok and self.on_change:
+            try:
+                self.on_change()
+            except Exception:
+                pass
+
+    def hs_start(self):
+        self.hs_msg.configure(text="Starting the station Wi-Fi...", fg=MUTED)
+        self.w.run(lambda: tuple(net.hotspot_start()[:2]), self.hs_say)
+
+    def hs_stop(self):
+        self.hs_msg.configure(text="Stopping...", fg=MUTED)
+
+        def work():
+            net.hotspot_stop()
+            return True, "Station Wi-Fi off"
+
+        def done(r):
+            self.hs_say(r)
+            self.scan_later()
+        self.w.run(work, done)
+
     def alive(self):
         try:
             return bool(self.win.winfo_exists())
@@ -212,7 +268,8 @@ class NetworkWindow:
         def done(r):
             if self.alive() and not isinstance(r, Exception):
                 self.st.configure(text="Now: %s" % r[0],
-                                  fg=OK if r[1] == "ok" else WARN)
+                                  fg=OK if r[1] == "ok" else
+                                  CYAN if r[1] == "hotspot" else WARN)
         self.w.run(net.summary, done)
 
     def scan(self):

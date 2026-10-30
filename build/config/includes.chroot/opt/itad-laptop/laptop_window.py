@@ -1,7 +1,15 @@
 #!/usr/bin/env python3
 """
-laptop_window.py - ITAD Laptop window (v1.8.0)
+laptop_window.py - ITAD Laptop window (v1.11.0)
 This is the GRAPHICAL USER INTERFACE (GUI).
+
+v1.11.0
+  - Same wording as PhoneSeal: top corner "Reports: Ready / Not kept (no
+    USB)", messages say "USB stick" (the Ventoy USB works, no USB B
+    needed). Wi-Fi is fixed at start-up by wifi_fix.sh (HP Realtek
+    RTL8723BE antenna), and the Network window says when it is still
+    being set up. Network window and net.py are the same files as
+    PhoneSeal.
 
 v1.8.0
   - New keyboard test: real laptop keyboard drawing (UK/Ireland by
@@ -155,7 +163,7 @@ try:
 except Exception:
     TZ = None
 
-VERSION = "1.10.2"
+VERSION = "1.11.0"
 TOOLS_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # --- THESE ARE THE FILES THIS GUI WILL RUN ---
@@ -2647,7 +2655,7 @@ class App:
             sys.stderr.write("network status not available: %s\n" % e)
         s1 = tk.Frame(box, bg=BANNER2)
         s1.pack(side="left", padx=(p(16), p(16)), pady=p(8))
-        tk.Label(s1, text="USB B (reports)", font=self.F(9), fg="#BFD3F2",
+        tk.Label(s1, text="Reports", font=self.F(9), fg="#BFD3F2",
                  bg=BANNER2).pack(anchor="w")
         self.h_ready = tk.Label(s1, text="", font=self.F(10, True),
                                 bg=BANNER2)
@@ -2880,7 +2888,7 @@ class App:
         if self.persistent:
             self.h_ready.configure(text="● Ready", fg=OK)
         else:
-            self.h_ready.configure(text="● No ITAD_DATA stick", fg=WARN)
+            self.h_ready.configure(text="● Not kept (no USB)", fg=WARN)
         self.root.after(1000, self.tick)
 
     def new_page(self, name):
@@ -3333,7 +3341,7 @@ class App:
             self.l_msg.configure(text="", fg=WARN)
         self.l_where.configure(
             text="" if self.persistent else
-            "No ITAD_DATA stick: new accounts and reports are lost at "
+            "No USB stick to save on: new accounts and reports are lost at "
             "power off.", fg=WARN)
         self.show("login")
         self.root.after(200, (self.l_pass.focus_set if self.v_user.get()
@@ -3460,7 +3468,7 @@ class App:
             win.destroy()
             note = "Saved %s in %s." % (name, path)
             if not self.persistent:
-                note += ("  WARNING: no ITAD_DATA stick, this account is "
+                note += ("  WARNING: no USB stick, this account is "
                          "lost at power off.")
             self.v_user.set(name)
             if self.pages["settings"].winfo_ismapped():
@@ -3711,7 +3719,7 @@ class App:
                              path, os.path.join(self.out_dir,
                                                 "blocked_devices.csv"),
                              "" if self.persistent else
-                             "\n(No ITAD_DATA stick: these files are lost "
+                             "\n(No USB stick to save on: these files are lost "
                              "at power off - copy them first.)"),
                     fg=CYAN if self.persistent else WARN)
             else:

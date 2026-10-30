@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
 """
-net.py - ITAD network helpers, shared by LaptopSeal / SwitchSeal / PhoneSeal (v0.4.0)
+net.py - ITAD network helpers, shared by LaptopSeal / SwitchSeal / PhoneSeal (v0.5.0)
 
+v0.5.0: ONE file for all tools (the PhoneSeal app install is in here too).
+wifi_problem() also says when the Wi-Fi is still being set up at start-up
+(wifi_fix.sh), when the station Wi-Fi is on (the card cannot scan then),
+and when the HP Realtek card found nothing with any antenna setting.
 v0.4.0: Wi-Fi scan switches the Wi-Fi radio on, waits for the card to be
 ready, scans twice, and wifi_problem() says in plain words why no Wi-Fi
 networks show (no card, airplane switch, missing driver/firmware...).
@@ -18,6 +22,7 @@ station. Three ways, easiest first:
 Everything uses NetworkManager (nmcli). All functions return plain values
 and never raise.
 """
+import os
 import random
 import re
 import subprocess
@@ -182,8 +187,25 @@ def scan():
     return sorted(nets.values(), key=lambda n: (-n["in_use"], -n["signal"]))
 
 
+def wifi_fix_state():
+    """'working' while wifi_fix.sh is still setting up the Wi-Fi (about one
+    minute after start-up), 'done' after, '' if it did not run."""
+    try:
+        with open("/tmp/itad-wifi.state") as f:
+            return f.read().strip()
+    except Exception:
+        return ""
+
+
 def wifi_problem():
     """Plain-English reason why no Wi-Fi networks were found."""
+    if hotspot_info():
+        return ("The station Wi-Fi (hotspot) is ON. While it runs, the Wi-Fi "
+                "card cannot look for other networks. Stop the station Wi-Fi "
+                "to see them.")
+    if wifi_fix_state() == "working":
+        return ("The Wi-Fi is still being set up (up to 1 minute after "
+                "start-up). Wait a moment and press Scan again.")
     rc, o, e = run(["nmcli", "-t", "-f", "RUNNING", "general"], 10)
     if rc != 0 or "running" not in o:
         run(["systemctl", "start", "NetworkManager"], 20)
@@ -227,6 +249,15 @@ def wifi_problem():
             return ("The Wi-Fi card (%s) is not ready - press the laptop's "
                     "Wi-Fi / airplane key, wait 10 seconds and press Scan "
                     "again." % dev)
+    try:
+        with open("/tmp/itad-wifi.log") as f:
+            wlog = f.read()
+    except Exception:
+        wlog = ""
+    if "no networks with any setting" in wlog:
+        return ("The Wi-Fi card (Realtek RTL8723BE) found no networks with "
+                "either antenna setting. Check the laptop's Wi-Fi key, move "
+                "closer to the router, or use a network cable.")
     return ("The Wi-Fi card works but found no networks here. Move closer "
             "to the router, wait a few seconds and press Scan again.")
 
@@ -288,16 +319,56 @@ def wifi_qr_text(ssid, password):
     return "WIFI:T:WPA;S:%s;P:%s;;" % (esc(ssid), esc(password))
 
 
+APP_PKG = "com.itad.phoneseal"
+APP_APK = os.path.join(os.path.dirname(os.path.abspath(__file__)), "app",
+                       "PhoneSeal.apk")
+
+
+def android_app_install(serial):
+    """Install (or update) the PhoneSeal test app on the phone over USB.
+    -g gives it camera, microphone etc. at once, so the phone does not ask.
+    (ok, message)"""
+    if not os.path.isfile(APP_APK):
+        return False, "PhoneSeal.apk is not on this USB"
+    rc, o, e = run(["adb", "-s", serial, "install", "-r", "-g", APP_APK], 120)
+    if rc == 0 and "Success" in o + e:
+        return True, "app installed"
+    # an older Android does not know -g
+    rc, o, e = run(["adb", "-s", serial, "install", "-r", APP_APK], 120)
+    if rc == 0 and "Success" in o + e:
+        return True, "app installed"
+    return False, ((e or o).strip().splitlines() or ["install failed"])[-1][:120]
+
+
+def android_app_remove(serial):
+    """Remove the PhoneSeal app from the phone (after testing)."""
+    rc, o, e = run(["adb", "-s", serial, "uninstall", APP_PKG], 60)
+    return rc == 0 and "Success" in o + e
+
+
 def android_usb_open(serial, url_path):
-    """Open the test page on an Android phone over the USB cable: the phone
-    reaches the station through adb (no Wi-Fi). (ok, message)"""
+    """Open the tests on an Android phone over the USB cable: the phone
+    reaches the station through adb (no Wi-Fi). It installs and opens the
+    PhoneSeal app (more tests: proximity, earpiece, flash, buttons...);
+    if that does not work it opens the page in the phone's browser.
+    (ok, message)"""
     rc, o, e = run(["adb", "-s", serial, "reverse", "tcp:%d" % PORT,
                     "tcp:%d" % PORT], 15)
     if rc != 0:
         return False, (e or o).strip()[:120] or "adb reverse failed"
     url = "https://127.0.0.1:%d%s" % (PORT, url_path)
+    ok, why = android_app_install(serial)
+    if ok:
+        run(["adb", "-s", serial, "shell", "input", "keyevent",
+             "KEYCODE_WAKEUP"], 10)
+        rc, o, e = run(["adb", "-s", serial, "shell", "am", "start", "-n",
+                        APP_PKG + "/.MainActivity", "--es", "url", url], 15)
+        if rc == 0 and "Error" not in o + e:
+            return True, "PhoneSeal app opened on the phone"
+        why = "app did not open"
     rc, o, e = run(["adb", "-s", serial, "shell", "am", "start", "-a",
                     "android.intent.action.VIEW", "-d", url], 15)
     if rc != 0 or "Error" in o + e:
         return False, "open this on the phone: %s" % url
-    return True, "test page opened on the phone"
+    return True, ("test page opened in the phone's browser (%s) - tap "
+                  "Advanced > Proceed" % why)
