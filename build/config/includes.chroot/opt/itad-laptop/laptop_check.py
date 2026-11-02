@@ -1,7 +1,19 @@
 #!/usr/bin/env python3
 """
-laptop_check.py - ITAD pre-wipe check (v3.1.7)  MULTI-PLATFORM
+laptop_check.py - ITAD pre-wipe check (v3.1.8)  MULTI-PLATFORM
 READ ONLY. Never wipes or writes to any internal drive.
+
+v3.1.8: A blank or already-wiped drive no longer ends as CANNOT CHECK.
+        If the internal drive was read fine and simply has no operating
+        system on it (no Windows, nothing encrypted, nothing unreadable),
+        and the firmware shows no Absolute / Computrace, the result is now
+        CLEAR with the note "No operating system on the drive". Before,
+        Absolute showed CANNOT CHECK just because there was no Windows,
+        even though Absolute lives in the BIOS, which was checked.
+        Fixed the NTFS read-only mount: ntfs-3g was given "noload", an
+        option it does not know, so the mount could fail. Added a safe
+        read-only "force" fallback for NTFS volumes left "dirty" by
+        Windows Fast Startup.
 
 v3.1.7: Safety: ANY USB or removable drive is now excluded from the
         "internal drives" list, whatever its size (before, USB sticks of
@@ -29,7 +41,7 @@ try:
 except Exception:
     NOW = datetime.now()
 
-VERSION = "3.1.7"
+VERSION = "3.1.8"
 
 BAD_SERIALS = {
     "", "none", "default string", "to be filled by o.e.m.",
@@ -749,8 +761,12 @@ def _has_luks_sig(dev):
 
 def mount_ro(dev, mnt, fs):
     if fs in ("ntfs", "ntfs3"):
-        cands = [["mount", "-t", "ntfs-3g", "-o", "ro,noload,nodev,nosuid,noexec", dev, mnt],
+        # v3.1.8: "noload" removed (ntfs-3g does not know it, so the mount
+        # could fail). "force" is only ever used together with "ro", so a
+        # volume left dirty by Windows Fast Startup can still be READ.
+        cands = [["mount", "-t", "ntfs-3g", "-o", "ro,nodev,nosuid,noexec", dev, mnt],
                  ["mount", "-t", "ntfs3", "-o", "ro,nodev,nosuid,noexec", dev, mnt],
+                 ["mount", "-t", "ntfs3", "-o", "ro,force,nodev,nosuid,noexec", dev, mnt],
                  ["mount", "-o", "ro,nodev,nosuid,noexec", dev, mnt]]
     elif fs == "apfs":
         cands = []
@@ -968,7 +984,21 @@ def absolute_box(abs_result, abs_signs, warns):
     box("ABSOLUTE", rows, color)
 
 
-def autopilot_box(analysis, os_checked):
+def autopilot_box(analysis, os_checked, blank_drive=False):
+    if blank_drive:
+        rows = [tag("CLEAN", "CLEAN  no operating system on the drive"), ""]
+        rows += para("The internal drive was read and has no Windows (or "
+                     "other OS) on it - it is blank or already wiped. There "
+                     "is nothing on the disk that can be enrolled.")
+        rows.append(None)
+        rows += para("Autopilot registration is stored in the customer's "
+                     "Microsoft cloud against the hardware, not on the "
+                     "disk. Before resale: check the serial in the "
+                     "customer's Intune portal, or use Autopilot Detection.",
+                     ("yellow",))
+        box("AUTOPILOT / MDM", rows, "green")
+        return "CLEAN"
+
     if not os_checked:
         rows = [tag("UNKNOWN", "UNKNOWN  could not inspect the Windows drive"),
                 ""]
@@ -1157,6 +1187,8 @@ def main():
 
     mounted = []
     unreadable, encrypted = [], []
+    odd_parts = []   # v3.1.8: has a filesystem we did not open
+    other_os = []    # v3.1.8: mounted, holds a non-Windows OS
     win_roots, mac_roots = [], []
     win_parts, mac_parts = [], []
     abs_signs, warns = [], []
@@ -1204,6 +1236,12 @@ def main():
             else:
                 try_fs = {"ntfs", "ntfs3", "ext4", "btrfs", "xfs", "fat32"}
             if fs not in try_fs:
+                # An empty / unformatted partition (e.g. Windows' small
+                # reserved one) or swap holds nothing to check.
+                if fs in ("", "swap"):
+                    st.skip("empty or swap (nothing to check)")
+                    continue
+                odd_parts.append("%s (fs=%s)" % (dev, fs))
                 st.skip("not checked (fs=%s)" % (fs or "?"))
                 vlog("%s skipped: fs=%s not in try_fs" % (dev, fs or "?"))
                 continue
@@ -1241,6 +1279,12 @@ def main():
             elif platform == "unknown":
                 abs_signs.extend(check_linux_absolute(mnt))
                 found = "mounted read-only"
+            if (found == "mounted read-only, no OS found" and
+                    (find_ci(mnt, "etc/os-release") or find_ci(mnt, "usr/bin"))):
+                # A Linux (or other) install, not Windows.
+                other_os.append(dev)
+                abs_signs.extend(check_linux_absolute(mnt))
+                found = "other OS (not Windows)"
             st.ok(found)
     finally:
         for m in mounted:
@@ -1250,14 +1294,30 @@ def main():
     os_checked = bool(
         (platform == "pc" and win_roots) or
         (platform == "mac" and mac_roots))
-    cannot = list(encrypted) + list(unreadable) + list(disk_notes)
+    # v3.1.8: the drive was read without problems and simply has no
+    # Windows on it -> blank or already wiped. Nothing on disk to enrol.
+    blank_drive = bool(
+        platform == "pc" and internal and not win_roots and
+        not encrypted and not unreadable and not odd_parts and
+        not disk_notes)
+    info = []
+    if blank_drive:
+        if other_os:
+            info.append("No Windows on the drive (another OS is installed: "
+                        "%s)" % ", ".join(other_os))
+        else:
+            info.append("No operating system on the drive (blank or "
+                        "already wiped)")
+
+    cannot = (list(encrypted) + list(unreadable) + list(disk_notes)
+              + ["Partition not checked: %s" % p for p in odd_parts])
     if platform == "chromebook":
         cannot.append("ChromeOS — check Settings > About ChromeOS > "
                       "Additional details > Enterprise enrollment")
     if platform == "mac" and not os_checked:
         cannot.append("Mac — no APFS/HFS volume readable (FileVault on "
                       "or apfs-fuse missing). Use macOS Recovery or ABM.")
-    if platform == "pc" and not os_checked:
+    if platform == "pc" and not os_checked and not blank_drive:
         cannot.append("No Windows volume could be inspected")
     if not internal:
         cannot.append("No internal drives detected")
@@ -1274,7 +1334,10 @@ def main():
 
     if abs_signs:
         abs_result = "BLOCKED"
-    elif os_checked and not cannot:
+    elif (os_checked or blank_drive) and not cannot:
+        # Firmware (BIOS) showed no Absolute, and the disk was either
+        # checked or has no OS on it. Absolute Persistence lives in the
+        # BIOS, so this is a real result.
         abs_result = "CLEAR"
     else:
         abs_result = "CANNOT CHECK"
@@ -1284,7 +1347,7 @@ def main():
         ap_result = "BLOCKED"
     elif ap_state == "PAST":
         ap_result = "WARN (past enrollment)"
-    elif os_checked:
+    elif os_checked or blank_drive:
         ap_result = "CLEAN"
     else:
         ap_result = "UNKNOWN"
@@ -1306,6 +1369,7 @@ def main():
         "windows_partitions": win_parts, "mac_partitions": mac_parts,
         "encrypted_partitions": encrypted, "unreadable_partitions": unreadable,
         "notes": cannot,
+        "drive_blank": blank_drive, "info": info,
         "absolute_result": abs_result, "absolute_signs": abs_signs,
         "autopilot_state": ap_state, "autopilot_result": ap_result,
         "autopilot_analysis": autopilot_analysis,
@@ -1329,8 +1393,11 @@ def main():
     rule("RESULTS")
     device_box(platform, ident, internal)
     absolute_box(abs_result, abs_signs, warns)
-    autopilot_box(autopilot_analysis, os_checked)
+    autopilot_box(autopilot_analysis, os_checked, blank_drive)
     cannot_box(encrypted, unreadable, cannot)
+    if info:
+        box("DRIVE", [r for s in info
+                      for r in item(paint(ICON["info"], "cyan"), s)], "cyan")
 
     if result == "BLOCKED":
         big_banner(["", "%s  %s" % (ICON["bad"], spaced("BLOCKED")),
