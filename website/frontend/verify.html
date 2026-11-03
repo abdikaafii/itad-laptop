@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Verify a certificate | ITAD Seal</title>
+<link rel="stylesheet" href="/static/css/base.css">
+<link rel="stylesheet" href="/static/css/app.css">
+</head>
+<body class="app">
+<div class="authwrap">
+  <div class="authbox" style="width:min(560px,100%)">
+    <a class="brand" href="/" style="color:#fff;text-decoration:none;display:flex;gap:.6rem;align-items:center;font-weight:800;font-size:1.15rem"><svg class="ico" style="width:28px;height:28px;color:#38bdf8"><use href="/static/img/sprite.svg#i-shield"/></svg>ITAD <b style="color:#2e9bff">Seal</b></a>
+    <h1 style="font-size:1.5rem;margin:.2em 0">Verify a certificate</h1>
+    <p style="color:#9db7e0;margin-top:0">Enter the certificate number printed on the certificate, or scan its QR code.</p>
+    <form id="vf"><div class="field"><label for="num">Certificate number</label><input id="num" autocomplete="off" placeholder="ITAD-2026-000123-7QK2" maxlength="60"></div>
+      <button class="btn" type="submit">Check</button></form>
+    <div id="out" role="status" aria-live="polite"></div>
+  </div>
+</div>
+<script src="/static/js/verify.js"></script>
+</body>
+</html>

@@ -1,0 +1,277 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ITAD Seal: IT asset intelligence, secure erasure, verified results</title>
+<meta name="description" content="Identify, inspect, securely erase and test laptops and IT equipment. Signed certificates and professional reports from one platform.">
+<meta name="theme-color" content="#050f22">
+<link rel="stylesheet" href="/static/css/base.css">
+<link rel="stylesheet" href="/static/css/site.css">
+</head>
+<body class="site">
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 2.5l8.5 3.2v6.6c0 5-3.6 8.4-8.5 9.5-4.9-1.1-8.5-4.5-8.5-9.5V5.7z"/><path d="M8.3 12.2l2.7 2.7 4.8-5.2"/></symbol>
+    <symbol id="i-laptop" viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="11" rx="1.5"/><path d="M2 19h20"/></symbol>
+    <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l5 5"/></symbol>
+    <symbol id="i-erase" viewBox="0 0 24 24"><path d="M4 16l9-9a2 2 0 013 0l3 3a2 2 0 010 3l-6 6H8z"/><path d="M8 20h12M9 12l5 5"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></symbol>
+    <symbol id="i-file" viewBox="0 0 24 24"><path d="M6 3h8l5 5v13H6z"/><path d="M14 3v5h5M9 13h6M9 17h6"/></symbol>
+    <symbol id="i-key" viewBox="0 0 24 24"><circle cx="8" cy="15" r="4"/><path d="M11 12l9-9M16 7l3 3"/></symbol>
+    <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
+    <symbol id="i-users" viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c0-3.5 3-6 6.5-6s6.5 2.5 6.5 6M16 4.5a3.5 3.5 0 010 7M18 14c2.5.6 4 2.6 4 5"/></symbol>
+    <symbol id="i-chart" viewBox="0 0 24 24"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></symbol>
+    <symbol id="i-lock" viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 018 0v3"/></symbol>
+    <symbol id="i-cpu" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/><rect x="9.5" y="9.5" width="5" height="5"/><path d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3"/></symbol>
+    <symbol id="i-ram" viewBox="0 0 24 24"><rect x="2" y="7" width="20" height="9" rx="1"/><path d="M6 16v3M10 16v3M14 16v3M18 16v3M6 11h2M11 11h2M16 11h2"/></symbol>
+    <symbol id="i-disk" viewBox="0 0 24 24"><ellipse cx="12" cy="6" rx="8" ry="3"/><path d="M4 6v6c0 1.7 3.6 3 8 3s8-1.3 8-3V6M4 12v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6"/></symbol>
+    <symbol id="i-battery" viewBox="0 0 24 24"><rect x="2" y="7" width="18" height="10" rx="2"/><path d="M22 11v2M6 10v4M10 10v4"/></symbol>
+    <symbol id="i-wifi" viewBox="0 0 24 24"><path d="M2 9a15 15 0 0120 0M5 12.5a10.5 10.5 0 0114 0M8.5 16a5.5 5.5 0 017 0"/><circle cx="12" cy="19" r="1"/></symbol>
+    <symbol id="i-net" viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="5"/><rect x="2" y="16" width="6" height="5"/><rect x="16" y="16" width="6" height="5"/><path d="M12 8v4M5 16v-4h14v4"/></symbol>
+    <symbol id="i-bt" viewBox="0 0 24 24"><path d="M7 7l10 10-5 4V3l5 4L7 17"/></symbol>
+    <symbol id="i-cam" viewBox="0 0 24 24"><rect x="3" y="7" width="18" height="12" rx="2"/><circle cx="12" cy="13" r="3.2"/><path d="M8 7l1.5-2.5h5L16 7"/></symbol>
+    <symbol id="i-usb" viewBox="0 0 24 24"><path d="M12 21V5M12 5l-2.5 3H14.5zM12 14l-4-3v-2M12 16l4-3v-2"/><circle cx="8" cy="8" r="1"/><rect x="15" y="8" width="2" height="2"/></symbol>
+    <symbol id="i-screen" viewBox="0 0 24 24"><rect x="2" y="4" width="20" height="13" rx="2"/><path d="M8 21h8M12 17v4"/></symbol>
+    <symbol id="i-kbd" viewBox="0 0 24 24"><rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10"/></symbol>
+    <symbol id="i-pad" viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="14" rx="2"/><path d="M4 14h16M12 14v5"/></symbol>
+    <symbol id="i-spk" viewBox="0 0 24 24"><path d="M4 9h4l5-4v14l-5-4H4z"/><path d="M16 9a4 4 0 010 6M18.5 6.5a7.5 7.5 0 010 11"/></symbol>
+    <symbol id="i-mic" viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0014 0M12 18v3"/></symbol>
+    <symbol id="i-hand" viewBox="0 0 24 24"><path d="M9 11V5a1.5 1.5 0 013 0v5M12 10V4.5a1.5 1.5 0 013 0V11M15 10.5a1.5 1.5 0 013 0V15a6 6 0 01-6 6h-1a6 6 0 01-5-3l-2-3.5a1.5 1.5 0 012.5-1.5L9 15"/></symbol>
+    <symbol id="i-bios" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M8 9h8M8 13h5M8 17h3"/></symbol>
+    <symbol id="i-qr" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><path d="M14 14h3v3M21 14v.01M14 21h3M21 17v4"/></symbol>
+    <symbol id="i-cycle" viewBox="0 0 24 24"><path d="M20 11a8 8 0 00-14-4L4 9M4 5v4h4M4 13a8 8 0 0014 4l2-2M20 19v-4h-4"/></symbol>
+  </defs>
+</svg>
+
+<header class="nav" id="nav">
+  <div class="wrap">
+    <a class="brand" href="/" aria-label="ITAD Seal home"><svg class="ico"><use href="#i-shield"/></svg>ITAD <b>Seal</b></a>
+    <ul id="menu">
+      <li><a href="#solutions">Solutions</a></li>
+      <li><a href="#testing">Testing</a></li>
+      <li><a href="#erasure">Erasure</a></li>
+      <li><a href="#certificates">Certificates</a></li>
+      <li><a href="#lifecycle">Lifecycle</a></li>
+      <li><a href="#why">Why us</a></li>
+      <li><a href="#contact">Contact</a></li>
+    </ul>
+    <div class="actions">
+      <a class="btn ghost sm" href="#login" data-tab="login">Log in</a>
+      <a class="btn sm" href="#contact">Request a demo</a>
+      <button class="burger" id="burger" aria-label="Menu" aria-expanded="false">Menu</button>
+    </div>
+  </div>
+</header>
+
+<main>
+<section class="hero">
+  <div class="wrap">
+    <div>
+      <div class="eyebrow">ITAD platform for laptops</div>
+      <h1>Complete IT Asset Intelligence. <span>Secure Erasure. Verified Results.</span></h1>
+      <p class="lead">Transform the way you manage IT assets. Identify, inspect, securely erase and test laptops and IT equipment with confidence. Generate professional certificates and comprehensive reports through one intelligent platform.</p>
+      <div class="cta">
+        <a class="btn" href="#contact">Request a demo</a>
+        <a class="btn ghost" href="#login" data-tab="register">Create a company account</a>
+      </div>
+      <div class="trust">
+        <span><svg class="ico"><use href="#i-check"/></svg>NIST SP 800-88 aligned methods</span>
+        <span><svg class="ico"><use href="#i-check"/></svg>Ed25519 signed evidence</span>
+        <span><svg class="ico"><use href="#i-check"/></svg>Europe/Dublin time stamps</span>
+      </div>
+    </div>
+    <div class="dash reveal" aria-label="Product dashboard preview (demonstration data)">
+      <div class="bar"><i></i><i></i><i></i><span>Dashboard · demonstration data</span></div>
+      <div class="kpis">
+        <div class="kpi"><small>Assets</small><b>1,284</b></div>
+        <div class="kpi"><small>Erased</small><b class="g">1,196</b></div>
+        <div class="kpi"><small>Failed</small><b class="r">23</b></div>
+        <div class="kpi"><small>Certificates</small><b>1,171</b></div>
+      </div>
+      <div class="mini">
+        <div class="card-d"><small style="color:#8fa6cc;font-size:.66rem;letter-spacing:.06em">ASSETS PROCESSED, LAST 12 DAYS</small>
+          <div class="bars" style="margin-top:8px"><i style="--h:38%"></i><i style="--h:52%"></i><i style="--h:44%"></i><i style="--h:70%"></i><i style="--h:62%"></i><i style="--h:84%"></i><i style="--h:58%"></i><i style="--h:76%"></i><i style="--h:92%"></i><i style="--h:68%"></i><i style="--h:80%"></i><i style="--h:100%"></i></div></div>
+        <div class="card-d"><small style="color:#8fa6cc;font-size:.66rem;letter-spacing:.06em">PASS RATE</small><div class="donut" style="margin-top:8px"></div></div>
+      </div>
+      <div class="rows">
+        <div class="row-d"><span>HP EliteBook 840 G5 <span class="mono">AST-004812</span></span><span class="chip pass">PASS</span></div>
+        <div class="row-d"><span>Dell Latitude 5420 <span class="mono">AST-004813</span></span><span class="chip warn">INCOMPLETE</span></div>
+        <div class="row-d"><span>Lenovo ThinkPad T14 <span class="mono">AST-004814</span></span><span class="chip fail">FAIL</span></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="white" id="solutions">
+  <div class="wrap">
+    <div class="center reveal"><div class="eyebrow">Our ITAD technology and solutions</div>
+      <h2>One platform from the loading dock to the certificate</h2>
+      <p class="lead">The platform sits on top of your boot-USB engine. The engine does the hardware work. The platform keeps the records, proves them and reports on them.</p></div>
+    <div class="grid g3" style="margin-top:44px">
+      <div class="card reveal"><div class="ic"><svg class="ico"><use href="#i-search"/></svg></div><h3>Identify and register</h3><p>Manufacturer, model, serial, CPU, RAM, storage, BIOS and operating system are read from the laptop itself. Job and asset IDs are cross-checked against the serial.</p></div>
+      <div class="card reveal"><div class="ic"><svg class="ico"><use href="#i-lock"/></svg></div><h3>Inspect before erasing</h3><p>Absolute and enrolment locks are found first. A blocked laptop cannot be wiped and cannot be passed. The website can never override that check.</p></div>
+      <div class="card reveal"><div class="ic"><svg class="ico"><use href="#i-erase"/></svg></div><h3>Erase and prove it</h3><p>The strongest method each drive supports, then a read-back verification. The method, device and result are recorded as evidence, never assumed.</p></div>
+      <div class="card reveal"><div class="ic"><svg class="ico"><use href="#i-cpu"/></svg></div><h3>Test every component</h3><p>Fifteen hardware tests with individual PASS, FAIL and NOT TESTED results. The overall status is calculated from the real results.</p></div>
+      <div class="card reveal"><div class="ic"><svg class="ico"><use href="#i-file"/></svg></div><h3>Certify and report</h3><p>Signed certificates with a QR code and a public verification page. Professional PDF and CSV reports for customers, jobs and technicians.</p></div>
+      <div class="card reveal"><div class="ic"><svg class="ico"><use href="#i-users"/></svg></div><h3>Work as a team</h3><p>Companies, technicians and customers each get their own role. Customers see only their own assets, certificates and reports.</p></div>
+    </div>
+  </div>
+</section>
+
+<section class="light" id="testing">
+  <div class="wrap">
+    <div class="center reveal"><div class="eyebrow">Laptop testing and diagnostics</div>
+      <h2>Every component, one clear result</h2>
+      <p class="lead">Automatic tests run on their own. Technician tests guide the screen step by step. Anything not tested stays visible as NOT TESTED.</p></div>
+    <div class="tests">
+      <div class="test reveal"><svg class="ico"><use href="#i-cpu"/></svg>CPU<em>PASS</em></div>
+      <div class="test reveal"><svg class="ico"><use href="#i-ram"/></svg>RAM<em>PASS</em></div>
+      <div class="test reveal"><svg class="ico"><use href="#i-disk"/></svg>Drive health<em>PASS</em></div>
+      <div class="test reveal"><svg class="ico"><use href="#i-battery"/></svg>Battery<em>PASS</em></div>
+      <div class="test reveal"><svg class="ico"><use href="#i-wifi"/></svg>Wi-Fi<em>PASS</em></div>
+      <div class="test reveal"><svg class="ico"><use href="#i-net"/></svg>Ethernet<em>PASS</em></div>
+      <div class="test reveal"><svg class="ico"><use href="#i-bt"/></svg>Bluetooth<em>PASS</em></div>
+      <div class="test reveal"><svg class="ico"><use href="#i-cam"/></svg>Webcam<em>PASS</em></div>
+      <div class="test reveal"><svg class="ico"><use href="#i-usb"/></svg>USB ports<em>PASS</em></div>
+      <div class="test reveal"><svg class="ico"><use href="#i-screen"/></svg>Screen<em>PASS</em></div>
+      <div class="test reveal"><svg class="ico"><use href="#i-kbd"/></svg>Keyboard<em>PASS</em></div>
+      <div class="test reveal"><svg class="ico"><use href="#i-pad"/></svg>Touchpad<em>PASS</em></div>
+      <div class="test reveal"><svg class="ico"><use href="#i-hand"/></svg>Touchscreen<em style="color:#5b6b84">N/A</em></div>
+      <div class="test reveal"><svg class="ico"><use href="#i-spk"/></svg>Speakers<em>PASS</em></div>
+      <div class="test reveal"><svg class="ico"><use href="#i-mic"/></svg>Microphone<em>PASS</em></div>
+    </div>
+    <p class="center" style="color:var(--grey);margin-top:22px">A part the laptop does not have is shown as N/A. It is not a fault and does not stop a PASS.</p>
+  </div>
+</section>
+
+<section class="dark" id="erasure">
+  <div class="wrap">
+    <div class="center reveal"><div class="eyebrow">Secure data erasure and sanitisation</div>
+      <h2>Aligned with NIST SP 800-88. Proven, not promised.</h2>
+      <p class="lead">The erasure runs in your existing engine on the physical laptop. The platform records what really happened and refuses to claim anything the evidence does not support.</p></div>
+    <div class="methods">
+      <div class="method reveal"><div class="tag">Purge</div><h3>Firmware sanitize</h3><p>ATA Secure Erase and NVMe Sanitize, with hidden areas (HPA and DCO) removed first so the whole drive is reached.</p></div>
+      <div class="method reveal"><div class="tag">Purge</div><h3>Cryptographic erase</h3><p>Destroys the encryption key on self-encrypting NVMe drives. Fast and strong where the drive supports it.</p></div>
+      <div class="method reveal"><div class="tag">Clear</div><h3>Overwrite</h3><p>Single-pass or three-pass overwrite and block discard as a fallback when a drive has no sanitize command.</p></div>
+    </div>
+    <div class="flow reveal"><span class="step">Lock check</span><span class="arrow">&rarr;</span><span class="step">Safety checks</span><span class="arrow">&rarr;</span><span class="step">Erase</span><span class="arrow">&rarr;</span><span class="step">Read-back verification</span><span class="arrow">&rarr;</span><span class="step">Signed evidence</span></div>
+    <div class="rule reveal"><b>Never a false wipe.</b> The live USB, the operating-system disk and removable drives are protected. The platform advises but never bypasses the physical safety checks, and a certificate is only issued for a verified erasure.</div>
+  </div>
+</section>
+
+<section class="white" id="certificates">
+  <div class="wrap split">
+    <div class="reveal">
+      <div class="eyebrow">Automated certificates and reporting</div>
+      <h2>Certificates that cannot be quietly changed</h2>
+      <p class="lead">Every certificate is signed, locked in the database and checkable by anyone with the number or the QR code.</p>
+      <ul class="ticks">
+        <li><svg class="ico"><use href="#i-check"/></svg><span><b>Unique number, QR code and public verification page</b> showing valid, revoked or demonstration.</span></li>
+        <li><svg class="ico"><use href="#i-check"/></svg><span><b>Tamper protection:</b> the engine report is fingerprinted and signed, the certificate is signed again, and the database refuses edits.</span></li>
+        <li><svg class="ico"><use href="#i-check"/></svg><span><b>Issued only from verified erasure records</b> that came from an intact engine report.</span></li>
+        <li><svg class="ico"><use href="#i-check"/></svg><span><b>Download, print, search and certificate history</b> for every customer.</span></li>
+      </ul>
+      <div class="reports"><span>Individual laptop report</span><span>Erasure certificate</span><span>Hardware testing</span><span>Customer assets</span><span>Technician performance</span><span>Job completion</span><span>Failed devices</span><span>Monthly processing</span><span>PDF + CSV</span></div>
+    </div>
+    <div class="cert reveal" aria-label="Certificate preview (demonstration)">
+      <div class="hd"><div><b>Your Company Name</b><br><small>TEST · WIPE · VERIFY · CERTIFY</small></div><b>Certificate of Data Erasure</b></div>
+      <div class="bd">
+        <div style="display:flex;justify-content:space-between;align-items:center"><div><small style="color:#5b6b84">CERTIFICATE NUMBER</small><br><b style="font-size:1rem">ITAD-2026-000123-7QK2</b></div><span class="stamp">VALID</span></div>
+        <div class="kv"><div><small>Manufacturer / model</small><b>HP EliteBook 840 G5</b></div><div><small>Serial number</small><b>5CG8241XYZ</b></div>
+          <div><small>Storage</small><b>Samsung PM981 256 GB</b></div><div><small>Method</small><b>NVMe Sanitize (Purge)</b></div>
+          <div><small>Verification</small><b>Success, read-back</b></div><div><small>Finished (Dublin)</small><b>2026-11-02 10:17:32</b></div></div>
+      </div>
+      <div class="ft"><div class="qr"></div><div>Scan to verify this certificate. Signed with Ed25519. Content hash 9f3a1c…e07b</div></div>
+    </div>
+  </div>
+</section>
+
+<section class="dark" id="lifecycle">
+  <div class="wrap">
+    <div class="center reveal"><div class="eyebrow">Asset lifecycle management</div>
+      <h2>Every laptop, every step, on the record</h2>
+      <p class="lead">Jobs group the assets of a customer. Each asset moves through the same six stages, and every action is written to a tamper-evident audit log.</p></div>
+    <div class="timeline">
+      <div class="tl reveal"><div class="dot"><svg class="ico"><use href="#i-laptop"/></svg></div><h3>Register</h3><p>Identity read from the device</p></div>
+      <div class="tl reveal"><div class="dot"><svg class="ico"><use href="#i-search"/></svg></div><h3>Inspect</h3><p>Locks and condition checked</p></div>
+      <div class="tl reveal"><div class="dot"><svg class="ico"><use href="#i-erase"/></svg></div><h3>Erase</h3><p>Sanitised and verified</p></div>
+      <div class="tl reveal"><div class="dot"><svg class="ico"><use href="#i-cpu"/></svg></div><h3>Test</h3><p>Fifteen components</p></div>
+      <div class="tl reveal"><div class="dot"><svg class="ico"><use href="#i-chart"/></svg></div><h3>Assess</h3><p>PASS, FAIL or INCOMPLETE</p></div>
+      <div class="tl reveal"><div class="dot"><svg class="ico"><use href="#i-shield"/></svg></div><h3>Certify</h3><p>Signed certificate and report</p></div>
+    </div>
+  </div>
+</section>
+
+<section class="light" id="benefits">
+  <div class="wrap">
+    <div class="center reveal"><div class="eyebrow">Customer benefits</div><h2>Confidence for the people who hand over their equipment</h2></div>
+    <div class="grid g4" style="margin-top:44px">
+      <div class="card reveal"><div class="ic"><svg class="ico"><use href="#i-shield"/></svg></div><h3>Proof, not promises</h3><p>Evidence for every device, checkable by auditors without calling you.</p></div>
+      <div class="card reveal"><div class="ic"><svg class="ico"><use href="#i-clock"/></svg></div><h3>Live job tracking</h3><p>Customers follow progress and download certificates the moment they are issued.</p></div>
+      <div class="card reveal"><div class="ic"><svg class="ico"><use href="#i-lock"/></svg></div><h3>Private by design</h3><p>A customer can only ever see their own assets, certificates and reports.</p></div>
+      <div class="card reveal"><div class="ic"><svg class="ico"><use href="#i-cycle"/></svg></div><h3>Better resale value</h3><p>Tested, graded devices with a clean record are easier to resell and reuse.</p></div>
+    </div>
+  </div>
+</section>
+
+<section class="white" id="why">
+  <div class="wrap">
+    <div class="center reveal"><div class="eyebrow">Why choose our platform?</div><h2>Built around what ITAD teams actually do</h2>
+      <p class="lead">Simplicity, automation, laptop diagnostics and reporting, with the safety rules of the shop floor built in.</p></div>
+    <div class="why reveal">
+      <div class="r"><span>Principle</span><span>What it means in practice</span></div>
+      <div class="r"><b><svg class="ico"><use href="#i-check"/></svg>Honest evidence</b><span>Overall results are calculated from stored records. A report that claims PASS but contains a failure is still FAIL.</span></div>
+      <div class="r"><b><svg class="ico"><use href="#i-lock"/></svg>Safety first</b><span>Live USB, OS disk and removable-disk protection, serial verification, job and asset cross-checking and dry-run by default stay in the engine.</span></div>
+      <div class="r"><b><svg class="ico"><use href="#i-key"/></svg>You hold the keys</b><span>Engine reports are signed with a key that lives on your own data stick. The platform only accepts keys your administrator trusts.</span></div>
+      <div class="r"><b><svg class="ico"><use href="#i-bios"/></svg>Works with what you have</b><span>Plugs into your existing Python check, wipe and test scripts through a small, documented API. Nothing is rebuilt from scratch.</span></div>
+      <div class="r"><b><svg class="ico"><use href="#i-users"/></svg>Multi-company ready</b><span>Separate companies, branding, certificate prefixes and roles, ready for refurbishers, data centres and recyclers.</span></div>
+    </div>
+  </div>
+</section>
+
+<section class="dark" id="contact">
+  <div class="wrap forms">
+    <div class="panel reveal">
+      <div class="eyebrow">Contact and demo request</div>
+      <h2 style="font-size:1.8rem">See it working on your equipment</h2>
+      <form id="contactForm" novalidate>
+        <div class="field"><label for="c-name">Your name</label><input id="c-name" name="name" autocomplete="name" required maxlength="100"></div>
+        <div class="field"><label for="c-email">Work e-mail</label><input id="c-email" name="email" type="email" autocomplete="email" required maxlength="200"></div>
+        <div class="field"><label for="c-company">Company</label><input id="c-company" name="company" autocomplete="organization" maxlength="150"></div>
+        <div class="field"><label for="c-msg">What would you like to see?</label><textarea id="c-msg" name="message" rows="4" maxlength="2000"></textarea></div>
+        <div id="contactMsg" role="status"></div>
+        <button class="btn" type="submit">Request a demo</button>
+      </form>
+    </div>
+    <div class="panel reveal" id="login">
+      <div class="eyebrow">Login and registration</div>
+      <div class="tabs" role="tablist">
+        <button role="tab" id="tab-login" aria-selected="true" data-tab="login">Sign in</button>
+        <button role="tab" id="tab-register" aria-selected="false" data-tab="register">Create account</button>
+      </div>
+      <form id="loginForm" data-pane="login" novalidate>
+        <div class="field"><label for="l-email">E-mail</label><input id="l-email" name="email" type="email" autocomplete="username" required></div>
+        <div class="field"><label for="l-pw">Password</label><input id="l-pw" name="password" type="password" autocomplete="current-password" required></div>
+        <div class="msg" id="loginMsg" role="alert" hidden></div>
+        <button class="btn" type="submit">Sign in</button>
+        <p style="margin:.9rem 0 0"><button type="button" class="link" id="forgotBtn">Forgot your password?</button></p>
+      </form>
+      <form id="registerForm" data-pane="register" hidden novalidate>
+        <div class="field"><label for="r-name">Your name</label><input id="r-name" name="name" autocomplete="name" required maxlength="100"></div>
+        <div class="field"><label for="r-company">Company name</label><input id="r-company" name="company_name" autocomplete="organization" required maxlength="150"></div>
+        <div class="field"><label for="r-email">Work e-mail</label><input id="r-email" name="email" type="email" autocomplete="email" required></div>
+        <div class="field"><label for="r-pw">Password (10+ characters, 3 kinds)</label><input id="r-pw" name="password" type="password" autocomplete="new-password" required minlength="10"></div>
+        <div class="msg" id="registerMsg" role="alert" hidden></div>
+        <button class="btn" type="submit">Create company account</button>
+        <p style="color:#8fa6cc;font-size:.84rem;margin:.8rem 0 0">You become the company administrator. We send a verification link to your e-mail.</p>
+      </form>
+    </div>
+  </div>
+</section>
+</main>
+
+<footer><div class="wrap"><span>© ITAD Seal Platform. Demonstration data is always labelled.</span><span><a href="/verify" style="color:#9db7e0">Verify a certificate</a> · <a href="/app" style="color:#9db7e0">Open the app</a></span></div></footer>
+<script src="/static/js/home.js"></script>
+</body>
+</html>
