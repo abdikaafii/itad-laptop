@@ -26,6 +26,16 @@ Everything below happens on the computer or server that will run the website, in
 4. Put it behind HTTPS (for example a reverse proxy such as Caddy or nginx). Cookies are Secure in production, so HTTPS is required.
 5. Back up the `dbdata` and `appdata` volumes. `appdata` holds the certificate signing key. **Losing it means old certificates can no longer be shown as valid.**
 
+## B2. Temporary public demo on Render (free, demo data only)
+Everything here is on the Render website, plus one GitHub step.
+1. Sign up at render.com with your GitHub account.
+2. Click **New > Blueprint**, choose the repo `abdikaafii/itad-laptop` and the branch `website-platform`. Render reads `render.yaml` in the repo root.
+3. Click **Apply**. The first build takes a few minutes.
+4. When it says Live, open the link. Sign in at `/app` with `admin@demo.itad`.
+5. The demo password is random here: Render dashboard > your service > **Environment** > `ITAD_DEMO_PASSWORD`.
+6. Limits: it sleeps after about 15 minutes idle (the next visit takes about a minute), and the free plan forgets its data on each restart, so demo data is re-created. Never put real customer data on it.
+Not tested on Render itself (no Docker available on the build machine); the start command was tested locally.
+
 ## C. Connect a test bench
 See `website/integrations/README.md`.
 

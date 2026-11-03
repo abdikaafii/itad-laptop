@@ -11,5 +11,7 @@ ENV ITAD_DATA_DIR=/data ITAD_FRONTEND_DIR=/app/frontend ITAD_MIGRATIONS_DIR=/app
 USER itad
 WORKDIR /app/backend
 EXPOSE 8000
-HEALTHCHECK CMD python -c "import urllib.request as u;u.urlopen('http://127.0.0.1:8000/api/health')" || exit 1
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers"]
+ENV PORT=8000
+HEALTHCHECK CMD python -c "import os,urllib.request as u;u.urlopen('http://127.0.0.1:%s/api/health' % os.environ.get('PORT','8000'))" || exit 1
+# Hosts such as Render give the port in $PORT; locally it stays 8000.
+CMD ["sh", "-c", "exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000} --proxy-headers --forwarded-allow-ips='*'"]

@@ -1,0 +1,20 @@
+# Render "Blueprint": a temporary DEMO of the ITAD Seal platform on Render's free plan.
+# Demo data only. The free plan sleeps when idle and forgets its data on every restart.
+services:
+  - type: web
+    name: itad-seal-demo
+    runtime: docker
+    plan: free
+    branch: website-platform
+    dockerfilePath: ./website/docker/Dockerfile
+    dockerContext: ./website
+    healthCheckPath: /api/health
+    envVars:
+      - key: ITAD_ENV
+        value: development        # development = demo accounts and labelled demo data are created
+      - key: ITAD_COOKIE_SECURE
+        value: "1"                # Render serves HTTPS
+      - key: ITAD_SECRET_KEY
+        generateValue: true
+      - key: ITAD_DEMO_PASSWORD
+        generateValue: true       # shown in the Render dashboard > Environment
