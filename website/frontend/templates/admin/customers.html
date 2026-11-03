@@ -1,0 +1,20 @@
+{% extends 'partials/app_base.html' %}
+{% from 'partials/macros.html' import csrf %}
+{% block title %}Customers{% endblock %}
+{% block body %}
+<div class="page-head"><h1>Customers</h1></div>
+{% if me.role == 'super_admin' %}<form class="filters" method="get" action="{{ url_for('admin.customers') }}"><div class="field"><label for="company">Company</label>
+  <select id="company" name="company" data-autosubmit><option value="">All</option>{% for c in companies %}<option value="{{ c.id }}" {{ 'selected' if cid == c.id }}>{{ c.name }}</option>{% endfor %}</select></div></form>{% endif %}
+<div class="panel"><div class="tablewrap"><table class="t"><thead><tr><th>Customer</th>{% if me.role == 'super_admin' %}<th>Company</th>{% endif %}<th>Contact</th><th>Jobs</th><th>Laptops</th></tr></thead><tbody>
+  {% for c in rows %}<tr><td><strong>{{ c.name }}</strong></td>{% if me.role == 'super_admin' %}<td>{{ c.company_name }}</td>{% endif %}<td>{{ c.contact_name }}<br><span class="small muted">{{ c.contact_email }}</span></td><td>{{ c.jobs }}</td><td>{{ c.assets }}</td></tr>
+  {% else %}<tr><td colspan="5" class="muted">No customers yet.</td></tr>{% endfor %}</tbody></table></div></div>
+{% if me.role != 'super_admin' or cid %}
+<form class="panel" method="post" action="{{ url_for('admin.customers') }}">{{ csrf() }}{% if cid and me.role == 'super_admin' %}<input type="hidden" name="company" value="{{ cid }}">{% endif %}
+  <h2>Add a customer</h2>
+  <div class="grid2"><div class="field"><label for="name">Name *</label><input id="name" name="name" type="text" required maxlength="160"></div>
+    <div class="field"><label for="contact_name">Contact name</label><input id="contact_name" name="contact_name" type="text" maxlength="120"></div>
+    <div class="field"><label for="contact_email">Contact email</label><input id="contact_email" name="contact_email" type="text" maxlength="160"></div>
+    <div class="field"><label for="address">Address</label><input id="address" name="address" type="text" maxlength="300"></div></div>
+  <button class="btn small" type="submit">Add customer</button>
+</form>{% else %}<p class="muted">Choose a company above to add customers to it.</p>{% endif %}
+{% endblock %}

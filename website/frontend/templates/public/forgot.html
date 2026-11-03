@@ -1,0 +1,16 @@
+{% extends 'partials/public_base.html' %}
+{% from 'partials/macros.html' import csrf, flashes %}
+{% block title %}Forgot password | ITAD Platform{% endblock %}
+{% block body %}
+<div class="wrap"><div class="auth-box">
+  <h1>Forgot your password?</h1>
+  <p class="muted">Enter your email and we will send you a link to choose a new one.</p>
+  {{ flashes() }}
+  <form method="post" action="{{ url_for('authentication.forgot_password') }}">
+    {{ csrf() }}
+    <div class="field"><label for="email">Email</label><input id="email" name="email" type="email" required autocomplete="email" autofocus></div>
+    <button class="btn w100" type="submit">Send reset link</button>
+  </form>
+  <p class="mt small"><a href="{{ url_for('authentication.login') }}">Back to sign in</a></p>
+</div></div>
+{% endblock %}

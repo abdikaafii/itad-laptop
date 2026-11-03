@@ -1,0 +1,30 @@
+{% extends 'partials/app_base.html' %}
+{% from 'partials/macros.html' import badge, csrf %}
+{% block title %}Job {{ j.job_ref }}{% endblock %}
+{% block body %}
+<div class="page-head"><div><h1>Job {{ j.job_ref }} {% if j.is_demo %}{{ badge('demo', 'DEMO') }}{% endif %}</h1><p class="muted mb0">{{ j.title }}</p></div>
+  <a class="btn ghost small" href="{{ url_for('assets.job_list') }}">Back to jobs</a></div>
+<div class="charts"><div>
+  <div class="panel"><h2>Laptops in this job</h2>
+    <div class="tablewrap"><table class="t"><thead><tr><th>Serial</th><th>Asset ID</th><th>Device</th><th>Status</th></tr></thead><tbody>
+    {% for a in assets %}<tr><td><a href="{{ url_for('assets.asset_detail', asset_id=a.id) }}"><strong>{{ a.serial }}</strong></a></td><td>{{ a.asset_tag or '-' }}</td><td>{{ a.manufacturer }} {{ a.model }}</td><td>{{ badge(a.status) }}</td></tr>
+    {% else %}<tr><td colspan="4" class="muted">No laptops yet.</td></tr>{% endfor %}</tbody></table></div></div>
+</div><div>
+  <div class="panel"><h2>Progress</h2>
+    <p>{{ badge(j.status) }}</p>
+    <div class="progress" data-pct="{{ (100 * done / j.expected_assets) if j.expected_assets else (100 if assets and done == assets|length else 0) }}"><i></i></div>
+    <p class="small muted">{{ done }} of {{ j.expected_assets or assets|length }} processed</p>
+    <dl class="dl"><dt>Customer</dt><dd>{{ customer.name if customer else '-' }}</dd><dt>Technician</dt><dd>{{ tech.full_name if tech else 'Unassigned' }}</dd>
+      <dt>Created</dt><dd>{{ j.created_at }} UTC</dd><dt>Completed</dt><dd>{{ (j.completed_at ~ ' UTC') if j.completed_at else '-' }}</dd></dl>
+    {% if j.notes %}<p class="small muted mt">{{ j.notes }}</p>{% endif %}
+    {% if me.role != 'customer' %}
+    <form method="post" action="{{ url_for('assets.job_status', job_id=j.id) }}" class="mt row">{{ csrf() }}
+      <select name="status" aria-label="Status">{% for v, l in statuses.items() %}{% if not (v == 'cancelled' and me.role == 'technician') %}<option value="{{ v }}" {{ 'selected' if j.status == v }}>{{ l }}</option>{% endif %}{% endfor %}</select>
+      <button class="btn small" type="submit">Update status</button></form>
+    {% endif %}
+    {% if techs %}<form method="post" action="{{ url_for('assets.job_assign', job_id=j.id) }}" class="mt row">{{ csrf() }}
+      <select name="technician_id" aria-label="Technician"><option value="">Unassigned</option>{% for t in techs %}<option value="{{ t.id }}" {{ 'selected' if j.assigned_technician_id == t.id }}>{{ t.full_name }}</option>{% endfor %}</select>
+      <button class="btn ghost small" type="submit">Assign</button></form>{% endif %}
+  </div>
+</div></div>
+{% endblock %}

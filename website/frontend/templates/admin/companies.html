@@ -1,0 +1,18 @@
+{% extends 'partials/app_base.html' %}
+{% from 'partials/macros.html' import badge, csrf %}
+{% block title %}Companies{% endblock %}
+{% block body %}
+<div class="page-head"><h1>Companies</h1></div>
+<div class="panel"><div class="tablewrap"><table class="t"><thead><tr><th>Company</th><th>Users</th><th>Laptops</th><th>Certificates</th><th>Status</th><th>Manage</th></tr></thead><tbody>
+  {% for c in rows %}<tr><td><strong>{{ c.name }}</strong>{% if c.is_demo %} {{ badge('demo', 'DEMO') }}{% endif %}<br><span class="small muted">created {{ c.created_at[:10] }}</span></td><td>{{ c.users }}</td><td>{{ c.assets }}</td><td>{{ c.certs }}</td>
+    <td>{{ badge('active' if c.is_active else 'cancelled', 'Active' if c.is_active else 'Switched off') }}</td>
+    <td class="row"><a class="btn ghost small" href="{{ url_for('admin.company', company=c.id) }}">Settings and keys</a><a class="btn ghost small" href="{{ url_for('admin.customers', company=c.id) }}">Customers</a>
+      <a class="btn ghost small" href="{{ url_for('admin.team_new', company_id=c.id) }}">Invite user</a>
+      <form method="post" action="{{ url_for('admin.company_toggle', cid=c.id) }}" class="inline" data-confirm="{{ 'Switch off this company? Nobody in it can sign in.' if c.is_active else 'Switch this company back on?' }}">{{ csrf() }}<button class="btn {{ 'danger' if c.is_active else 'ghost' }} small" type="submit">{{ 'Switch off' if c.is_active else 'Switch on' }}</button></form></td></tr>
+  {% endfor %}</tbody></table></div></div>
+<form class="panel" method="post" action="{{ url_for('admin.companies') }}">{{ csrf() }}<h2>Create a company</h2>
+  <div class="row"><input type="text" name="name" required maxlength="120" placeholder="Company name" aria-label="Company name"><button class="btn small" type="submit">Create</button></div>
+  <p class="small muted mt mb0">Then invite its first Company Administrator with the Invite user button.</p></form>
+<div class="panel"><h2>Latest demo requests</h2>
+  {% for d in demo_requests %}<p class="small"><strong>{{ d.name }}</strong> &lt;{{ d.email }}&gt; {{ d.company }} <span class="muted">{{ d.created_at }} UTC</span><br>{{ d.message }}</p>{% else %}<p class="muted">None.</p>{% endfor %}</div>
+{% endblock %}

@@ -1,0 +1,58 @@
+{% extends 'partials/app_base.html' %}
+{% from 'partials/macros.html' import badge %}
+{% block title %}Dashboard{% endblock %}
+{% block body %}
+{% set k = data.kpi %}
+<div class="page-head">
+  <h1>Dashboard</h1>
+  <div class="row no-print">
+    <a class="btn ghost small" href="{{ url_for('dashboard.stats_csv') }}?{{ request.query_string.decode() }}">Download CSV</a>
+    {% if me.role != 'customer' %}<a class="btn small" href="{{ url_for('assets.asset_new', company=f.company if f.company else None) }}">Register a laptop</a>{% endif %}
+  </div>
+</div>
+
+<form class="filters no-print" method="get" action="{{ url_for('dashboard.home') }}">
+  <div class="field"><label for="days">Period</label>
+    <select id="days" name="days" data-autosubmit>
+      {% for v, l in [('7', 'Last 7 days'), ('30', 'Last 30 days'), ('90', 'Last 90 days'), ('365', 'Last year'), ('all', 'All time')] %}<option value="{{ v }}" {{ 'selected' if f.days == v }}>{{ l }}</option>{% endfor %}
+    </select></div>
+  {% if lists.companies %}<div class="field"><label for="company">Company</label><select id="company" name="company" data-autosubmit><option value="">All companies</option>
+    {% for c in lists.companies %}<option value="{{ c.id }}" {{ 'selected' if f.company == c.id }}>{{ c.name }}</option>{% endfor %}</select></div>{% endif %}
+  {% if lists.techs %}<div class="field"><label for="tech">Technician</label><select id="tech" name="tech" data-autosubmit><option value="">Everyone</option>
+    {% for t in lists.techs %}<option value="{{ t.id }}" {{ 'selected' if f.tech == t.id }}>{{ t.full_name }}</option>{% endfor %}</select></div>{% endif %}
+  {% if lists.customers %}<div class="field"><label for="customer">Customer</label><select id="customer" name="customer" data-autosubmit><option value="">All customers</option>
+    {% for c in lists.customers %}<option value="{{ c.id }}" {{ 'selected' if f.customer == c.id }}>{{ c.name }}</option>{% endfor %}</select></div>{% endif %}
+  <noscript><button class="btn small" type="submit">Apply</button></noscript>
+</form>
+
+<div class="kpis">
+  <div class="kpi"><b>{{ k.total_processed }}</b><span>Assets processed</span></div>
+  <div class="kpi good"><b>{{ k.erased_ok }}</b><span>Successfully erased</span></div>
+  <div class="kpi bad"><b>{{ k.failed }}</b><span>Failed devices</span></div>
+  <div class="kpi wait"><b>{{ k.awaiting_testing }}</b><span>Awaiting testing</span></div>
+  <div class="kpi"><b>{{ k.certificates }}</b><span>Certificates generated</span></div>
+  <div class="kpi good"><b>{{ k.jobs_completed }}</b><span>Jobs completed</span></div>
+</div>
+
+<div id="dash-charts" class="charts">
+  <div class="panel"><h2>Laptops registered per day</h2><div id="chart-days"><p class="muted">Loading chart...</p></div>
+    <div class="legend"><span><i class="lg-blue"></i>Registered</span><span><i class="lg-red"></i>Failed</span></div></div>
+  <div class="panel"><h2>Laptops by status</h2><div id="chart-status"><p class="muted">Loading chart...</p></div></div>
+</div>
+
+<div class="charts">
+  <div class="panel"><h2>Recent activity</h2>
+    {% if data.recent %}<ul class="timeline">
+      {% for r in data.recent %}<li><strong>{{ r.action|replace('.', ' ')|replace('_', ' ') }}</strong> {% if r.detail %}<span class="muted">{{ r.detail }}</span>{% endif %}<br><span class="small muted">{{ r.ts }} UTC{% if r.actor %} &middot; {{ r.actor }}{% endif %}</span></li>{% endfor %}
+    </ul>{% else %}<p class="muted">Nothing yet.</p>{% endif %}</div>
+  <div class="panel"><h2>Top manufacturers</h2><div id="chart-makers"><p class="muted">Loading chart...</p></div></div>
+</div>
+
+{% if data.technicians %}
+<div class="panel"><h2>Technician activity</h2>
+  <div class="tablewrap"><table class="t"><thead><tr><th>Technician</th><th>Laptops</th><th>Passed</th><th>Failed</th><th>Last activity</th></tr></thead><tbody>
+    {% for t in data.technicians %}<tr><td>{{ t.name }}</td><td>{{ t.n }}</td><td>{{ t.passed or 0 }}</td><td>{{ t.failed or 0 }}</td><td class="muted small">{{ t.last }}</td></tr>{% endfor %}
+  </tbody></table></div></div>
+{% endif %}
+{% endblock %}
+{% block scripts %}<script src="{{ url_for('static', filename='js/charts.js') }}" defer></script>{% endblock %}

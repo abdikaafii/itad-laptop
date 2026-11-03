@@ -1,0 +1,17 @@
+{% extends 'partials/app_base.html' %}
+{% from 'partials/macros.html' import csrf %}
+{% block title %}Invite a user{% endblock %}
+{% block body %}
+<div class="page-head"><h1>Invite a user</h1><a class="btn ghost small" href="{{ url_for('admin.team') }}">Back to team</a></div>
+<form class="panel" method="post" action="{{ url_for('admin.team_new') }}">{{ csrf() }}
+  <p class="muted small">They receive an email with a link to choose their own password. Nobody else ever sees it.</p>
+  <div class="grid2">
+    {% if companies %}<div class="field"><label for="company_id">Company</label><select id="company_id" name="company_id">{% for c in companies %}<option value="{{ c.id }}" {{ 'selected' if cid == c.id }}>{{ c.name }}</option>{% endfor %}</select><div class="hint">Customer users need their company's customers. Create customers first.</div></div>{% endif %}
+    <div class="field"><label for="full_name">Name *</label><input id="full_name" name="full_name" type="text" required maxlength="120" value="{{ form.get('full_name', '') }}"></div>
+    <div class="field"><label for="email">Email *</label><input id="email" name="email" type="email" required maxlength="254" value="{{ form.get('email', '') }}"></div>
+    <div class="field"><label for="role">Role *</label><select id="role" name="role">{% for v, l in roles %}<option value="{{ v }}" {{ 'selected' if form.get('role') == v }}>{{ l }}</option>{% endfor %}</select></div>
+    <div class="field"><label for="customer_id">Customer (for the Customer role)</label><select id="customer_id" name="customer_id"><option value="">None</option>{% for c in customers %}<option value="{{ c.id }}" {{ 'selected' if form.get('customer_id') == c.id|string }}>{{ c.name }}</option>{% endfor %}</select></div>
+  </div>
+  <button class="btn" type="submit">Send invitation</button>
+</form>
+{% endblock %}

@@ -1,0 +1,20 @@
+{% extends 'partials/app_base.html' %}
+{% from 'partials/macros.html' import csrf %}
+{% block title %}New job{% endblock %}
+{% block body %}
+<div class="page-head"><h1>New job</h1><a class="btn ghost small" href="{{ url_for('assets.job_list') }}">Back to jobs</a></div>
+<form class="panel" method="post" action="{{ url_for('assets.job_new') }}">
+  {{ csrf() }}{% if me.role == 'super_admin' %}<input type="hidden" name="company" value="{{ company }}">{% endif %}
+  <div class="grid2">
+    <div class="field"><label for="job_ref">Job reference *</label><input id="job_ref" name="job_ref" type="text" required maxlength="60" value="{{ form.get('job_ref', '') }}"><div class="hint">This is the Job ID technicians type at the station. No spaces.</div></div>
+    <div class="field"><label for="title">Title</label><input id="title" name="title" type="text" maxlength="160" value="{{ form.get('title', '') }}"></div>
+    <div class="field"><label for="customer_id">Customer</label><select id="customer_id" name="customer_id"><option value="">None</option>
+      {% for c in customers %}<option value="{{ c.id }}" {{ 'selected' if form.get('customer_id') == c.id|string }}>{{ c.name }}</option>{% endfor %}</select></div>
+    <div class="field"><label for="technician_id">Assigned technician</label><select id="technician_id" name="technician_id"><option value="">Unassigned</option>
+      {% for t in techs %}<option value="{{ t.id }}" {{ 'selected' if form.get('technician_id') == t.id|string }}>{{ t.full_name }}</option>{% endfor %}</select></div>
+    <div class="field"><label for="expected_assets">Expected laptops</label><input id="expected_assets" name="expected_assets" type="number" min="0" max="100000" value="{{ form.get('expected_assets', '') }}"></div>
+  </div>
+  <div class="field"><label for="notes">Notes</label><textarea id="notes" name="notes" maxlength="1500">{{ form.get('notes', '') }}</textarea></div>
+  <button class="btn" type="submit">Create job</button>
+</form>
+{% endblock %}

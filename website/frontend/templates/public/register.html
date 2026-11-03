@@ -1,0 +1,20 @@
+{% extends 'partials/public_base.html' %}
+{% from 'partials/macros.html' import csrf, flashes %}
+{% block title %}Register your company | ITAD Platform{% endblock %}
+{% block body %}
+<div class="wrap"><div class="auth-box">
+  <h1>Register your company</h1>
+  <p class="muted">You become the Company Administrator. You can then invite technicians and customers.</p>
+  {{ flashes() }}
+  <form method="post" action="{{ url_for('authentication.register') }}">
+    {{ csrf() }}
+    <div class="field"><label for="company">Company name</label><input id="company" name="company" type="text" required maxlength="120" value="{{ form.get('company', '') }}" autocomplete="organization"></div>
+    <div class="field"><label for="full_name">Your name</label><input id="full_name" name="full_name" type="text" required maxlength="120" value="{{ form.get('full_name', '') }}" autocomplete="name"></div>
+    <div class="field"><label for="email">Work email</label><input id="email" name="email" type="email" required maxlength="254" value="{{ form.get('email', '') }}" autocomplete="email"></div>
+    <div class="field"><label for="password">Password</label><input id="password" name="password" type="password" required minlength="10" autocomplete="new-password"><div class="hint">At least 10 characters, upper and lower case, and a number.</div></div>
+    <div class="field"><label for="confirm">Repeat password</label><input id="confirm" name="confirm" type="password" required autocomplete="new-password"></div>
+    <button class="btn w100" type="submit">Create account</button>
+  </form>
+  <p class="mt small">Already registered? <a href="{{ url_for('authentication.login') }}">Sign in</a></p>
+</div></div>
+{% endblock %}

@@ -1,0 +1,26 @@
+{% extends 'partials/app_base.html' %}
+{% from 'partials/macros.html' import csrf %}
+{% block title %}Register a laptop{% endblock %}
+{% block body %}
+<div class="page-head"><h1>Register a laptop</h1><a class="btn ghost small" href="{{ url_for('assets.asset_list') }}">Back to laptops</a></div>
+<form class="panel" method="post" action="{{ url_for('assets.asset_new') }}">
+  {{ csrf() }}{% if me.role == 'super_admin' %}<input type="hidden" name="company" value="{{ company }}">{% endif %}
+  <h2>Step 1: identify the laptop</h2>
+  <p class="muted small">Type what you can see. When the processing station sends its signed report, it fills in and confirms the hardware details. A serial number that does not match the report is rejected.</p>
+  <div class="grid2">
+    <div class="field"><label for="serial">Serial number *</label><input id="serial" name="serial" type="text" required maxlength="160" value="{{ form.get('serial', '') }}"></div>
+    <div class="field"><label for="asset_tag">Asset ID</label><input id="asset_tag" name="asset_tag" type="text" maxlength="160" value="{{ form.get('asset_tag', '') }}"></div>
+    <div class="field"><label for="job_id">Job</label><select id="job_id" name="job_id"><option value="">No job yet</option>
+      {% for j in jobs %}<option value="{{ j.id }}" {{ 'selected' if form.get('job_id') == j.id|string }}>{{ j.job_ref }}{% if j.title %} - {{ j.title }}{% endif %}</option>{% endfor %}</select></div>
+    <div class="field"><label for="location">Location</label><input id="location" name="location" type="text" maxlength="160" value="{{ form.get('location', '') }}"></div>
+    <div class="field"><label for="manufacturer">Manufacturer</label><input id="manufacturer" name="manufacturer" type="text" maxlength="160" value="{{ form.get('manufacturer', '') }}"></div>
+    <div class="field"><label for="model">Model</label><input id="model" name="model" type="text" maxlength="160" value="{{ form.get('model', '') }}"></div>
+    <div class="field"><label for="cpu">CPU</label><input id="cpu" name="cpu" type="text" maxlength="160" value="{{ form.get('cpu', '') }}"></div>
+    <div class="field"><label for="ram">RAM</label><input id="ram" name="ram" type="text" maxlength="160" value="{{ form.get('ram', '') }}"></div>
+    <div class="field"><label for="storage">Storage</label><input id="storage" name="storage" type="text" maxlength="160" value="{{ form.get('storage', '') }}"></div>
+    <div class="field"><label for="bios">BIOS</label><input id="bios" name="bios" type="text" maxlength="160" value="{{ form.get('bios', '') }}"></div>
+    <div class="field"><label for="os_info">Operating system</label><input id="os_info" name="os_info" type="text" maxlength="160" value="{{ form.get('os_info', '') }}"></div>
+  </div>
+  <button class="btn" type="submit">Register laptop</button>
+</form>
+{% endblock %}

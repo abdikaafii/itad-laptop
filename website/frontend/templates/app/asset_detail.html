@@ -1,0 +1,96 @@
+{% extends 'partials/app_base.html' %}
+{% from 'partials/macros.html' import badge, csrf %}
+{% block title %}{{ a.serial }}{% endblock %}
+{% block body %}
+{% set staff = me.role != 'customer' %}
+<div class="page-head">
+  <div><h1>{{ a.manufacturer }} {{ a.model }} {% if a.is_demo %}{{ badge('demo', 'DEMONSTRATION') }}{% endif %}</h1>
+    <p class="muted mb0">Serial <span class="mono">{{ a.serial }}</span> &middot; {{ badge(a.status) }}</p></div>
+  <div class="row no-print">
+    <a class="btn ghost small" href="{{ url_for('reports.asset_report', asset_id=a.id) }}">Laptop report (PDF)</a>
+    <a class="btn ghost small" href="{{ url_for('reports.asset_hardware_report', asset_id=a.id) }}">Hardware test report (PDF)</a>
+    <a class="btn ghost small" href="{{ url_for('assets.asset_list') }}">Back</a>
+  </div>
+</div>
+
+{% if staff %}
+  {% if not latest %}
+    <div class="alert warn"><strong>No engine report yet.</strong> Run the laptop through the boot-USB tool, then upload its signed report below (or let the station send it).</div>
+  {% elif latest.signature_status != 'valid' %}
+    <div class="alert bad"><strong>Latest report is not verified: {{ latest.signature_status|replace('_', ' ') }}.</strong>
+      {% if latest.signature_status == 'unknown_key' %}Its signing key (ID <span class="mono">{{ latest.key_id }}</span>) is not registered. Compare the ID with the one on your ITAD_DATA stick, register the key under Company &amp; keys, then press Re-check.{% else %}Certificates cannot be issued from it.{% endif %}</div>
+  {% endif %}
+  {% if cross_notes %}<div class="alert bad"><strong>Cross-check problems</strong><ul>{% for n in cross_notes %}<li>{{ n }}</li>{% endfor %}</ul></div>{% endif %}
+  {% if elig.ok %}
+    <div class="alert good"><strong>Ready for certification.</strong> Every drive shows a verified erasure and the report is trusted.
+      <form method="post" action="{{ url_for('assets.asset_issue', asset_id=a.id) }}" class="mt" data-confirm="Issue the certificate? You are confirming the erasure result is acceptable.">{{ csrf() }}<button class="btn" type="submit">Issue certificate{{ 's' if elig.erasures|length > 1 }}</button></form></div>
+  {% elif latest and elig.blockers and latest.signature_status == 'valid' and not cross_notes %}
+    <div class="alert warn"><strong>No certificate yet</strong><ul>{% for b in elig.blockers %}<li>{{ b }}</li>{% endfor %}</ul></div>
+  {% endif %}
+{% endif %}
+
+<div class="charts">
+<div>
+  <div class="panel"><h2>Step 1: Identification</h2>
+    <dl class="dl">
+      <dt>Customer</dt><dd>{{ customer.name if customer else '-' }}</dd>
+      <dt>Job</dt><dd>{% if job %}<a href="{{ url_for('assets.job_detail', job_id=job.id) }}">{{ job.job_ref }}</a>{% else %}-{% endif %}</dd>
+      <dt>Asset ID</dt><dd>{{ a.asset_tag or '-' }}</dd><dt>Manufacturer / model</dt><dd>{{ a.manufacturer }} {{ a.model }}</dd>
+      <dt>CPU</dt><dd>{{ a.cpu or '-' }}</dd><dt>RAM</dt><dd>{{ a.ram or '-' }}</dd><dt>Storage</dt><dd>{{ a.storage or '-' }}</dd>
+      <dt>BIOS</dt><dd>{{ a.bios or '-' }}</dd><dt>Operating system</dt><dd>{{ a.os_info or '-' }}</dd><dt>Boot mode</dt><dd>{{ a.boot_mode or '-' }}</dd>
+      <dt>Technician</dt><dd>{{ a.technician_name or '-' }}</dd><dt>Location</dt><dd>{{ a.location or '-' }}</dd>
+      <dt>Registered</dt><dd>{{ a.created_at }} UTC</dd><dt>Processed</dt><dd>{{ (a.processed_at ~ ' UTC') if a.processed_at else '-' }}</dd>
+    </dl></div>
+
+  <div class="panel"><h2>Step 2: Initial inspection</h2>
+    <dl class="dl"><dt>Pre-wipe check</dt><dd>{{ a.check_result or 'not recorded' }}</dd><dt>Absolute</dt><dd>{{ a.absolute_status or '-' }}</dd>
+      <dt>Enrolment (Autopilot / MDM)</dt><dd>{{ a.enrolment_status or '-' }}</dd><dt>Cosmetic grade</dt><dd>{{ a.cosmetic_grade or '-' }}</dd></dl>
+    {% if staff %}
+    <form method="post" action="{{ url_for('assets.asset_inspection', asset_id=a.id) }}" class="mt">{{ csrf() }}
+      <div class="checks">{% for c in checks %}<label><input type="checkbox" name="chk_{{ loop.index0 }}" {{ 'checked' if c in done_checks }}>{{ c }}</label>{% endfor %}</div>
+      <div class="field mt"><label for="notes">Notes</label><textarea id="notes" name="notes" maxlength="1500">{{ notes_text }}</textarea></div>
+      <button class="btn small" type="submit">Save inspection</button>
+    </form>
+    {% elif notes_text or done_checks %}<p class="mt small muted">{{ done_checks|join(', ') }}{{ ' | ' ~ notes_text if notes_text }}</p>{% endif %}
+  </div>
+
+  <div class="panel"><h2>Step 3: Data erasure</h2>
+    {% if erasures %}<div class="tablewrap"><table class="t"><thead><tr><th>Drive</th><th>Method</th><th>Standard</th><th>Result</th><th>Verified</th><th>Finished</th></tr></thead><tbody>
+      {% for e in erasures %}<tr><td>{{ e.device_path }}<br><span class="small muted">{{ e.model }}{% if e.capacity_gb %}, {{ e.capacity_gb|int }} GB{% endif %}</span></td>
+        <td>{{ e.method }}</td><td class="small">{{ e.standard or e.level or '-' }}</td>
+        <td>{{ badge('success' if e.status == 'Success' else ('warn' if 'not verified' in e.status else 'fail'), e.status) }}</td><td>{{ 'Yes' if e.verified else 'No' }}</td><td class="small">{{ e.finished }}</td></tr>{% endfor %}
+    </tbody></table></div>
+    {% else %}<p class="muted">No erasure has been recorded. A wipe is never assumed.</p>{% endif %}</div>
+
+  <div class="panel"><h2>Step 4: Hardware testing</h2>
+    <div class="tablewrap"><table class="t"><thead><tr><th>Component</th><th>Result</th><th>Notes</th></tr></thead><tbody>
+      {% for t in tests %}<tr><td>{{ t.component }}</td><td>{{ badge(t.status) }}</td><td class="small muted">{{ t.notes or '' }}</td></tr>{% endfor %}
+    </tbody></table></div></div>
+</div>
+
+<div>
+  <div class="panel"><h2>Step 5: Final assessment</h2>
+    <p>{{ badge(a.status) }}</p>
+    <p class="small muted mb0">Worked out by the engine from the actual wipe and test results. It is not edited by hand.</p></div>
+
+  <div class="panel"><h2>Certificates</h2>
+    {% for c in certs %}<p><a href="{{ url_for('certificates.cert_detail', cert_id=c.id) }}"><strong class="mono">{{ c.number }}</strong></a>
+      {{ badge('revoked') if c.revoked else (badge('demo', 'DEMO') if c.is_demo else badge('valid')) }}<br><span class="small muted">Issued {{ c.issued_at[:10] }}</span></p>
+    {% else %}<p class="muted">None issued yet.</p>{% endfor %}</div>
+
+  {% if staff %}
+  <div class="panel"><h2>Step 6: Reports from the station</h2>
+    {% for r in reports %}<p class="small"><strong>{{ r.received_at }} UTC</strong> {{ badge(r.signature_status) }} {{ badge(r.overall.lower() if r.overall else 'none', r.overall) }}{% if r.test_mode %} {{ badge('warn', 'TEST MODE') }}{% endif %}<br>
+      <span class="muted">via {{ r.source }}, key {{ r.key_id or 'none' }}</span><br><span class="mono muted">{{ r.computed_sha256[:24] }}...</span></p>
+    {% else %}<p class="muted">Nothing received.</p>{% endfor %}
+    <form method="post" action="{{ url_for('assets.asset_upload_report', asset_id=a.id) }}" enctype="multipart/form-data" class="mt">{{ csrf() }}
+      <div class="field"><label for="report">Upload report file (.json)</label><input id="report" name="report" type="file" accept=".json,application/json" required></div>
+      <button class="btn small" type="submit">Upload and verify</button></form>
+    {% if latest %}<form method="post" action="{{ url_for('assets.asset_recheck', asset_id=a.id) }}" class="mt">{{ csrf() }}<button class="btn ghost small" type="submit">Re-check signature and job links</button></form>{% endif %}
+  </div>
+  <div class="panel"><h2>History</h2>
+    <ul class="timeline">{% for t in timeline %}<li><strong>{{ t.action|replace('.', ' ')|replace('_', ' ') }}</strong> <span class="muted">{{ t.detail }}</span><br><span class="small muted">{{ t.ts }} UTC &middot; {{ t.actor }}</span></li>{% else %}<li class="muted">No history.</li>{% endfor %}</ul></div>
+  {% endif %}
+</div>
+</div>
+{% endblock %}

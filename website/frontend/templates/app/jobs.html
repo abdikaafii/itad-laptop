@@ -1,0 +1,21 @@
+{% extends 'partials/app_base.html' %}
+{% from 'partials/macros.html' import badge, pager %}
+{% block title %}Jobs{% endblock %}
+{% block body %}
+<div class="page-head"><h1>Jobs</h1>
+  <div class="row no-print"><a class="btn ghost small" href="{{ url_for('reports.index', type='job_completion') }}">Job completion report</a>
+  {% if can_manage and me.role != 'super_admin' %}<a class="btn small" href="{{ url_for('assets.job_new') }}">New job</a>{% endif %}</div></div>
+<form class="filters" method="get" action="{{ url_for('assets.job_list') }}">
+  <div class="field"><label for="q">Search</label><input id="q" type="search" name="q" value="{{ request.args.get('q', '') }}" placeholder="Job, title, customer"></div>
+  <div class="field"><label for="status">Status</label><select id="status" name="status" data-autosubmit><option value="">Any</option>
+    {% for v, l in statuses %}<option value="{{ v }}" {{ 'selected' if request.args.get('status') == v }}>{{ l }}</option>{% endfor %}</select></div>
+  <button class="btn small" type="submit">Filter</button>
+</form>
+<div class="panel"><div class="tablewrap"><table class="t"><thead><tr><th>Job</th><th>Customer</th><th>Status</th><th>Technician</th><th>Progress</th><th>Created</th></tr></thead><tbody>
+  {% for j in page.rows %}<tr><td><a href="{{ url_for('assets.job_detail', job_id=j.id) }}"><strong>{{ j.job_ref }}</strong></a>{% if j.is_demo %} {{ badge('demo', 'DEMO') }}{% endif %}<br><span class="small muted">{{ j.title }}</span></td>
+    <td>{{ j.customer_name or '-' }}</td><td>{{ badge(j.status) }}</td><td>{{ j.tech_name or '-' }}</td>
+    <td><div class="progress" data-pct="{{ (100 * j.done_count / j.expected_assets) if j.expected_assets else (100 if j.asset_count and j.done_count == j.asset_count else 0) }}"><i></i></div>
+      <span class="small muted">{{ j.done_count }} of {{ j.expected_assets or j.asset_count }} done</span></td><td class="small">{{ j.created_at[:10] }}</td></tr>
+  {% else %}<tr><td colspan="6" class="muted">No jobs yet.</td></tr>{% endfor %}
+</tbody></table></div>{{ pager(page, qs, 'assets.job_list') }}</div>
+{% endblock %}

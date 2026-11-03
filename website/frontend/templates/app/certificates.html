@@ -1,0 +1,22 @@
+{% extends 'partials/app_base.html' %}
+{% from 'partials/macros.html' import badge, pager %}
+{% block title %}Certificates{% endblock %}
+{% block body %}
+<div class="page-head"><h1>Certificate history</h1>
+  <a class="btn ghost small no-print" href="{{ url_for('reports.index', type='erasure_certificates') }}">Certificate register (PDF / CSV)</a></div>
+<form class="filters" method="get" action="{{ url_for('certificates.cert_list') }}">
+  <div class="field"><label for="q">Search</label><input id="q" type="search" name="q" value="{{ request.args.get('q', '') }}" placeholder="Number, serial, customer, job..."></div>
+  <div class="field"><label for="state">Status</label><select id="state" name="state" data-autosubmit><option value="">Any</option>
+    {% for v, l in [('valid', 'Valid'), ('revoked', 'Revoked'), ('demo', 'Demonstration')] %}<option value="{{ v }}" {{ 'selected' if request.args.get('state') == v }}>{{ l }}</option>{% endfor %}</select></div>
+  <div class="field"><label for="from">From</label><input id="from" type="date" name="from" value="{{ request.args.get('from', '') }}"></div>
+  <div class="field"><label for="to">To</label><input id="to" type="date" name="to" value="{{ request.args.get('to', '') }}"></div>
+  <button class="btn small" type="submit">Filter</button><a class="btn ghost small" href="{{ url_for('certificates.cert_list') }}">Clear</a>
+</form>
+<div class="panel"><div class="tablewrap"><table class="t"><thead><tr><th>Certificate</th><th>Issued</th><th>Customer</th><th>Device</th><th>Serial</th><th>Job</th><th>Status</th><th></th></tr></thead><tbody>
+  {% for c in page.rows %}<tr><td><a href="{{ url_for('certificates.cert_detail', cert_id=c.id) }}"><strong class="mono">{{ c.number }}</strong></a></td><td class="small">{{ c.issued_at[:10] }}</td>
+    <td>{{ c.customer_name or '-' }}</td><td>{{ c.manufacturer }} {{ c.model }}</td><td>{{ c.serial }}</td><td>{{ c.job_ref or '-' }}</td>
+    <td>{{ badge('revoked') if c.revoked else (badge('demo', 'DEMO') if c.is_demo else badge('valid')) }}</td>
+    <td><a class="btn ghost small" href="{{ url_for('certificates.cert_pdf', cert_id=c.id) }}">PDF</a></td></tr>
+  {% else %}<tr><td colspan="8" class="muted">No certificates match.</td></tr>{% endfor %}
+</tbody></table></div>{{ pager(page, qs, 'certificates.cert_list') }}</div>
+{% endblock %}

@@ -1,0 +1,154 @@
+{% extends 'partials/public_base.html' %}
+{% from 'partials/macros.html' import icon, csrf, flashes %}
+{% block title %}ITAD Platform | Complete IT Asset Intelligence{% endblock %}
+{% block body %}
+<section class="hero">
+  <div class="wrap">
+    <div>
+      <span class="eyebrow">IT asset disposition software</span>
+      <h1>Complete IT Asset Intelligence. <span>Secure Erasure. Verified Results.</span></h1>
+      <p class="lead">Transform the way you manage IT assets. Identify, inspect, securely erase and test laptops and IT equipment with confidence. Generate professional certificates and comprehensive reports through one intelligent platform.</p>
+      <div class="cta">
+        <a class="btn" href="{{ url_for('authentication.register') }}">Create your company account</a>
+        <a class="btn ghost light" href="#contact">Request a demo</a>
+      </div>
+      <p class="small hero-note">Certificates are only issued from signed, verified erasure reports. Nothing is rounded up to a pass.</p>
+    </div>
+    <div class="preview" aria-label="Dashboard preview">
+      <div class="bar"><i></i><i></i><i></i></div>
+      <div class="pv-kpis">
+        <div class="pv-kpi"><b>1,284</b><span>Laptops processed</span></div>
+        <div class="pv-kpi"><b>1,201</b><span>Erased and verified</span></div>
+        <div class="pv-kpi"><b>1,196</b><span>Certificates issued</span></div>
+      </div>
+      <svg viewBox="0 0 360 110" role="img" aria-label="Sample chart of laptops per day" width="100%">
+        <g fill="#3b82f6">
+          {% for h in [30, 44, 38, 58, 50, 72, 64, 80, 70, 92, 84, 96] %}<rect x="{{ 8 + loop.index0 * 29 }}" y="{{ 104 - h }}" width="20" height="{{ h }}" rx="3" opacity="{{ 0.55 + loop.index0 * 0.04 }}"/>{% endfor %}
+        </g>
+      </svg>
+      <div class="pv-rows">
+        <div class="pv-row"><span>Latitude 5420 &middot; SN ••••4821</span><span class="pv-pass">PASS</span></div>
+        <div class="pv-row"><span>EliteBook 840 G8 &middot; SN ••••1177</span><span class="pv-pass">PASS</span></div>
+        <div class="pv-row"><span>ThinkPad T14 &middot; SN ••••9034</span><span class="pv-warn">INCOMPLETE</span></div>
+      </div>
+      <p class="small pv-note">Illustration with sample figures.</p>
+    </div>
+  </div>
+</section>
+
+<section class="section" id="solutions">
+  <div class="wrap">
+    <div class="section-head reveal"><span class="eyebrow dk">Our ITAD technology</span><h2>One record for every laptop, from the loading bay to the certificate</h2>
+      <p>The platform pairs with a boot-USB engine that checks, wipes and tests the machine. Everything it produces lands here, signed, searchable and ready to share with your customer.</p></div>
+    <div class="cards">
+      <article class="card reveal"><div class="icon">{{ icon('laptop') }}</div><h3>Identify and register</h3><p>Manufacturer, model, serial, asset tag, CPU, RAM, storage, BIOS, operating system and technician, tied to a job and customer.</p></article>
+      <article class="card reveal"><div class="icon">{{ icon('wipe') }}</div><h3>Erase with evidence</h3><p>The method, drive, level and verification result are recorded per drive, aligned with NIST SP 800-88 Clear and Purge.</p></article>
+      <article class="card reveal"><div class="icon">{{ icon('test') }}</div><h3>Test every component</h3><p>Keyboard, touchpad, screen, webcam, speakers, Wi-Fi, ethernet, USB, battery, CPU, RAM, storage and more, each shown as PASS, FAIL or NOT TESTED.</p></article>
+      <article class="card reveal"><div class="icon">{{ icon('cert') }}</div><h3>Certify and prove</h3><p>Numbered PDF certificates with a QR code and a public verification page that detects alteration.</p></article>
+    </div>
+  </div>
+</section>
+
+<section class="section alt" id="testing">
+  <div class="wrap split">
+    <div class="reveal"><span class="eyebrow dk">Laptop testing and diagnostics</span><h2>Honest results, not optimistic ones</h2>
+      <p>A part that was not tested says so. A warning stays a warning. The overall result is calculated from what actually happened, and the report shows why.</p>
+      <ul class="ticks"><li>Absolute and Autopilot or MDM enrolment checked before any wipe</li><li>Per-component results with notes, including a cosmetic grade</li><li>Hardware testing report as a separate, shareable PDF</li><li>Pass, fail and incomplete tracked per job, customer and technician</li></ul></div>
+    <div class="card reveal"><h3>Hardware test results</h3>
+      <table class="t"><tbody>
+        <tr><td>CPU</td><td><span class="badge b-pass">PASS</span></td></tr><tr><td>RAM</td><td><span class="badge b-pass">PASS</span></td></tr>
+        <tr><td>Battery</td><td><span class="badge b-warn">WARN</span></td></tr><tr><td>Keyboard</td><td><span class="badge b-pass">PASS</span></td></tr>
+        <tr><td>Webcam</td><td><span class="badge b-not_tested">NOT TESTED</span></td></tr><tr><td>Wi-Fi</td><td><span class="badge b-pass">PASS</span></td></tr>
+      </tbody></table><p class="small muted flush">Sample data for illustration.</p></div>
+  </div>
+</section>
+
+<section class="section dark" id="erasure">
+  <div class="wrap">
+    <div class="section-head reveal"><span class="eyebrow">Secure data erasure and sanitisation</span><h2>A certificate has to be earned</h2>
+      <p>The website never starts a wipe and never overrides the safety checks on the boot USB. It receives the signed result and checks it.</p></div>
+    <div class="steps reveal">
+      <div class="step"><strong>Pre-wipe check</strong><p class="small muted">Absolute, enrolment and readable drives. Anything but CLEAR blocks certification.</p></div>
+      <div class="step"><strong>Wipe on the device</strong><p class="small muted">Live USB, OS disk and removable disks are protected on the machine itself.</p></div>
+      <div class="step"><strong>Signed report</strong><p class="small muted">SHA-256 fingerprint plus Ed25519 signature from your station key.</p></div>
+      <div class="step"><strong>Platform verifies</strong><p class="small muted">Signature, Job ID, Asset ID and serial are cross-checked.</p></div>
+      <div class="step"><strong>Certificate issued</strong><p class="small muted">Only when every drive shows verified erasure.</p></div>
+    </div>
+  </div>
+</section>
+
+<section class="section" id="certificates">
+  <div class="wrap split">
+    <div class="cert-mock reveal" aria-label="Sample certificate">
+      <div class="top"><strong>Your company</strong><span>Certificate of Data Erasure</span></div>
+      <div class="body"><div class="qr" role="img" aria-label="Sample QR code"></div><strong>ITAD-2026-A1B2C3D4E5F6</strong>
+        <dl><dt>Device</dt><dd>Dell Latitude 5420</dd><dt>Serial</dt><dd>•••••4821</dd><dt>Method</dt><dd>Purge: firmware secure erase</dd><dt>Standard</dt><dd>NIST SP 800-88 Rev. 2 Purge</dd><dt>Verification</dt><dd>VERIFIED</dd></dl>
+        <p class="small muted flush">Sample layout for illustration.</p></div>
+    </div>
+    <div class="reveal"><span class="eyebrow dk">Automated certificates and reporting</span><h2>Certificates your customers can check themselves</h2>
+      <p>Each certificate carries a unique number, your logo and details, the drive and method, the technician and a QR code. Anyone can open the verification page and see whether it is genuine, altered or withdrawn.</p>
+      <ul class="ticks"><li>Download, print, search and keep a full certificate history</li><li>Edits and deletions are blocked in the database itself</li><li>Eight report types with PDF and CSV export</li></ul>
+      <a class="btn ghost" href="{{ url_for('public.verify_form') }}">Try the verification page</a></div>
+  </div>
+</section>
+
+<section class="section alt" id="lifecycle">
+  <div class="wrap">
+    <div class="section-head reveal"><span class="eyebrow dk">Asset lifecycle management</span><h2>From collection job to closed job</h2></div>
+    <div class="cards">
+      <article class="card reveal"><div class="icon">{{ icon('jobs') }}</div><h3>Jobs</h3><p>Create a job per collection, assign a technician, track expected against processed laptops and close it when done.</p></article>
+      <article class="card reveal"><div class="icon">{{ icon('lifecycle') }}</div><h3>Status you can trust</h3><p>Registered, inspected, erased, passed, failed or incomplete. Updated only by real reports.</p></article>
+      <article class="card reveal"><div class="icon">{{ icon('chart') }}</div><h3>Live dashboard</h3><p>Totals, failures, devices awaiting tests, technician activity and daily throughput with filters and CSV download.</p></article>
+      <article class="card reveal"><div class="icon">{{ icon('log') }}</div><h3>Audit trail</h3><p>Every sign-in, upload, certificate and change is logged and cannot be edited afterwards.</p></article>
+    </div>
+  </div>
+</section>
+
+<section class="section" id="benefits">
+  <div class="wrap">
+    <div class="section-head reveal"><span class="eyebrow dk">Customer benefits</span><h2>Give your customers proof, not promises</h2></div>
+    <div class="cards">
+      <article class="card reveal"><div class="icon">{{ icon('portal') }}</div><h3>Customer portal</h3><p>Customers sign in to see their own laptops, follow job progress and download certificates and reports.</p></article>
+      <article class="card reveal"><div class="icon">{{ icon('customers') }}</div><h3>Strict separation</h3><p>A customer can only ever see records that belong to them. Other customers' data is not reachable.</p></article>
+      <article class="card reveal"><div class="icon">{{ icon('search') }}</div><h3>Instant lookup</h3><p>Search by serial, asset ID, job or certificate number and get the full history on one page.</p></article>
+    </div>
+  </div>
+</section>
+
+<section class="section dark" id="why">
+  <div class="wrap">
+    <div class="section-head reveal"><span class="eyebrow">Why choose our platform?</span><h2>Built for the people who actually process the laptops</h2></div>
+    <div class="cards">
+      <article class="card reveal"><h3>Verification built in</h3><p>No signed report, no certificate. Unknown keys, tampered files and unsigned reports are stored but cannot certify anything.</p></article>
+      <article class="card reveal"><h3>Works with your existing engine</h3><p>Your laptop check, wipe and test tools stay exactly as they are. The platform receives their signed reports through a small API.</p></article>
+      <article class="card reveal"><h3>Simple for technicians</h3><p>One screen per laptop with identity, erasure evidence, tests and certificate together.</p></article>
+      <article class="card reveal"><h3>Secure by default</h3><p>Hashed passwords, role-based access, CSRF protection, strict content security policy and an append-only audit log.</p></article>
+    </div>
+  </div>
+</section>
+
+<section class="section alt" id="contact">
+  <div class="wrap split">
+    <div class="reveal"><span class="eyebrow dk">Contact and demo request</span><h2>See it with your own workflow</h2><p>Tell us about your volumes and customers and we will set up a walk-through.</p></div>
+    <form class="card reveal" method="post" action="{{ url_for('public.request_demo') }}">
+      {{ flashes() }}{{ csrf() }}
+      <div class="field"><label for="d-name">Your name</label><input id="d-name" name="name" type="text" required maxlength="120" autocomplete="name"></div>
+      <div class="field"><label for="d-email">Work email</label><input id="d-email" name="email" type="email" required maxlength="254" autocomplete="email"></div>
+      <div class="field"><label for="d-co">Company</label><input id="d-co" name="company" type="text" maxlength="120" autocomplete="organization"></div>
+      <div class="field"><label for="d-msg">How can we help?</label><textarea id="d-msg" name="message" maxlength="1500"></textarea></div>
+      <button class="btn" type="submit">Request a demo</button>
+    </form>
+  </div>
+</section>
+
+<section class="section" id="login">
+  <div class="wrap">
+    <div class="section-head reveal"><span class="eyebrow dk">Login and registration</span><h2>Get started</h2></div>
+    <div class="cards">
+      <article class="card reveal"><h3>Already have an account?</h3><p>Technicians, administrators and customers sign in here.</p><a class="btn" href="{{ url_for('authentication.login') }}">Sign in</a></article>
+      <article class="card reveal"><h3>New company</h3><p>Register your company, verify your email and invite your technicians and customers.</p><a class="btn ghost" href="{{ url_for('authentication.register') }}">Register your company</a></article>
+      <article class="card reveal"><h3>Holding a certificate?</h3><p>Check that it is genuine. No account needed.</p><a class="btn ghost" href="{{ url_for('public.verify_form') }}">Verify a certificate</a></article>
+    </div>
+  </div>
+</section>
+{% endblock %}

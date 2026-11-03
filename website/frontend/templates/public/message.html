@@ -1,0 +1,6 @@
+{% extends 'partials/public_base.html' %}
+{% block title %}{{ title }} | ITAD Platform{% endblock %}
+{% block body %}
+<div class="wrap"><div class="auth-box center"><h1>{{ title }}</h1><p class="muted">{{ message }}</p>
+  <a class="btn ghost" href="{{ url_for('public.index') }}">Back to the home page</a></div></div>
+{% endblock %}

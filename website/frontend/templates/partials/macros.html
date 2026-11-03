@@ -1,0 +1,47 @@
+{# Shared template pieces #}
+{% macro icon(name) -%}
+<svg viewBox="0 0 24 24" aria-hidden="true">
+{%- if name == 'dashboard' %}<rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/>
+{%- elif name == 'laptop' %}<rect x="4" y="5" width="16" height="11" rx="1.5"/><path d="M2 19h20"/>
+{%- elif name == 'jobs' %}<rect x="3" y="7" width="18" height="13" rx="2"/><path d="M9 7V5a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2M3 13h18"/>
+{%- elif name == 'cert' %}<path d="M12 3l7 3v5c0 4.5-3 8-7 10-4-2-7-5.5-7-10V6z"/><path d="M8.5 12l2.5 2.5L15.5 9.5"/>
+{%- elif name == 'reports' %}<path d="M6 3h9l4 4v14H6z"/><path d="M14 3v5h5M9 13h7M9 17h7"/>
+{%- elif name == 'users' %}<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c.6-3.6 3.4-5.5 6.5-5.5s5.9 1.9 6.5 5.5M16 4.5a3.5 3.5 0 0 1 0 7M18 14.8c2 .6 3.3 2.4 3.6 5.2"/>
+{%- elif name == 'building' %}<path d="M4 21V5l8-2v18M12 9h8v12M7 8v.01M7 12v.01M7 16v.01M16 13v.01M16 17v.01M3 21h18"/>
+{%- elif name == 'key' %}<circle cx="8" cy="15" r="4"/><path d="M11 12l9-9M16 7l3 3M14 9l2 2"/>
+{%- elif name == 'log' %}<path d="M5 4h14v16H5zM9 9h6M9 13h6M9 17h3"/>
+{%- elif name == 'customers' %}<path d="M3 21v-1a6 6 0 0 1 6-6h0a6 6 0 0 1 6 6v1"/><circle cx="9" cy="7" r="4"/><path d="M17 11l2 2 3-4"/>
+{%- elif name == 'search' %}<circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/>
+{%- elif name == 'wipe' %}<path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 11v6M14 11v6"/>
+{%- elif name == 'test' %}<path d="M9 3h6M10 3v6l-5 9a2 2 0 0 0 2 3h10a2 2 0 0 0 2-3l-5-9V3M8 15h8"/>
+{%- elif name == 'chart' %}<path d="M4 20V4M4 20h16M8 16v-4M12 16V8M16 16v-6"/>
+{%- elif name == 'lifecycle' %}<path d="M20 12a8 8 0 1 1-2.4-5.7M20 4v5h-5"/>
+{%- elif name == 'portal' %}<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c3 3 3 15 0 18M12 3c-3 3-3 15 0 18"/>
+{%- endif %}</svg>
+{%- endmacro %}
+
+{% macro badge(value, label=None) -%}
+<span class="badge b-{{ (value or 'none')|string|lower|replace(' ', '_') }}">{{ (label or value or '-')|string|replace('_', ' ')|title if not label else label }}</span>
+{%- endmacro %}
+
+{% macro pager(page, qs, endpoint) -%}
+{% if page.pages > 1 %}
+<nav class="pager" aria-label="Pages">
+  <span class="muted small">{{ page.total }} result{{ '' if page.total == 1 else 's' }}</span>
+  {% if page.page > 1 %}<a class="btn ghost small" href="{{ url_for(endpoint) }}?{{ qs(page=page.page - 1) }}">Previous</a>{% endif %}
+  <span class="small">Page {{ page.page }} of {{ page.pages }}</span>
+  {% if page.page < page.pages %}<a class="btn ghost small" href="{{ url_for(endpoint) }}?{{ qs(page=page.page + 1) }}">Next</a>{% endif %}
+</nav>
+{% elif page.total %}<p class="muted small">{{ page.total }} result{{ '' if page.total == 1 else 's' }}</p>{% endif %}
+{%- endmacro %}
+
+{% macro csrf() -%}<input type="hidden" name="_csrf" value="{{ csrf_token() }}">{%- endmacro %}
+
+{% macro logo_mark() -%}
+<svg viewBox="0 0 32 32" aria-hidden="true"><defs><linearGradient id="lg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#3b82f6"/><stop offset="1" stop-color="#22d3ee"/></linearGradient></defs>
+<path d="M16 2l12 4.5V15c0 7-5 12.2-12 15C9 27.200 4 22 4 15V6.500z" fill="url(#lg)"/><path d="M10.500 16l4 4 7.500-8" fill="none" stroke="#fff" stroke-width="2.800" stroke-linecap="round" stroke-linejoin="round"/></svg>
+{%- endmacro %}
+
+{% macro flashes() -%}
+{% with msgs = get_flashed_messages(with_categories=true) %}{% for cat, m in msgs %}<div class="flash {{ cat }}" role="status">{{ m }}</div>{% endfor %}{% endwith %}
+{%- endmacro %}

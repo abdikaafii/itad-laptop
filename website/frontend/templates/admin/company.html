@@ -1,0 +1,62 @@
+{% extends 'partials/app_base.html' %}
+{% from 'partials/macros.html' import badge, csrf %}
+{% block title %}Company and keys{% endblock %}
+{% block body %}
+<div class="page-head"><h1>{{ co.name }}</h1>{% if me.role == 'super_admin' %}<a class="btn ghost small" href="{{ url_for('admin.companies') }}">All companies</a>{% endif %}</div>
+{% if new_token %}<div class="alert good"><strong>New API token. Copy it now: it is shown only once.</strong><div class="token-box mt">{{ new_token }}</div>
+  <p class="small mb0 mt">Give it to the processing station as ITAD_TOKEN. Treat it like a password.</p></div>{% endif %}
+
+<div class="charts">
+<form class="panel" method="post" action="{{ url_for('admin.company') }}">{{ csrf() }}{% for k, v in keep.items() %}<input type="hidden" name="{{ k }}" value="{{ v }}">{% endfor %}
+  <h2>Company details</h2>
+  <p class="small muted">These appear on every certificate and report.</p>
+  <div class="grid2">
+    <div class="field"><label for="name">Name *</label><input id="name" name="name" type="text" required maxlength="120" value="{{ co.name }}"></div>
+    <div class="field"><label for="legal_name">Legal name</label><input id="legal_name" name="legal_name" type="text" maxlength="160" value="{{ co.legal_name }}"></div>
+    <div class="field"><label for="email">Email</label><input id="email" name="email" type="text" maxlength="160" value="{{ co.email }}"></div>
+    <div class="field"><label for="phone">Phone</label><input id="phone" name="phone" type="text" maxlength="60" value="{{ co.phone }}"></div>
+    <div class="field"><label for="website">Website</label><input id="website" name="website" type="text" maxlength="160" value="{{ co.website }}"></div>
+    <div class="field"><label for="address">Address</label><input id="address" name="address" type="text" maxlength="300" value="{{ co.address }}"></div>
+  </div>
+  <div class="field"><label for="certificate_footer">Certificate footer text</label><textarea id="certificate_footer" name="certificate_footer" maxlength="400">{{ co.certificate_footer }}</textarea></div>
+  <div class="field"><label class="row"><input type="checkbox" name="auto_issue" value="1" {{ 'checked' if co.auto_issue_certificates }}> Issue certificates automatically when a verified report arrives</label>
+    <div class="hint">Off by default. With it off, a named person reviews each result and presses Issue certificate. That review is the validation step NIST SP 800-88 describes.</div></div>
+  <button class="btn" type="submit">Save details</button>
+</form>
+
+<div>
+  <form class="panel" method="post" action="{{ url_for('admin.company_logo') }}" enctype="multipart/form-data">{{ csrf() }}{% for k, v in keep.items() %}<input type="hidden" name="{{ k }}" value="{{ v }}">{% endfor %}
+    <h2>Logo</h2>
+    {% if co.logo_file %}<p><img src="{{ url_for('admin.logo_file', cid=co.id) }}" alt="Current logo" width="180"></p>{% else %}<p class="muted small">No logo yet.</p>{% endif %}
+    <div class="field"><label for="logo">PNG or JPEG, under 1 MB</label><input id="logo" name="logo" type="file" accept="image/png,image/jpeg" required></div>
+    <button class="btn small" type="submit">Upload logo</button>
+  </form>
+</div></div>
+
+<div class="panel"><h2>Station signing keys</h2>
+  <p class="small muted">Each ITAD_DATA stick creates a signing key the first time it makes a report. Register the public key (itad_signing_public.pem) here. Reports signed by an unregistered key are stored but cannot produce a certificate.</p>
+  {% if pending %}<div class="alert warn"><strong>Reports are waiting for these unregistered keys</strong>
+    {% for p in pending %}<div class="mt"><span class="mono">ID {{ p.key_id }}</span> &middot; {{ p.n }} report{{ 's' if p.n != 1 }}, last {{ p.last }} UTC
+      <form method="post" action="{{ url_for('admin.key_add') }}" class="row mt">{{ csrf() }}{% for k, v in keep.items() %}<input type="hidden" name="{{ k }}" value="{{ v }}">{% endfor %}
+        <input type="hidden" name="public_key" value="{{ p.public_key_hex }}"><input type="text" name="confirm_key_id" placeholder="Type the key ID from the USB stick to confirm" required aria-label="Key ID from the stick" maxlength="40">
+        <input type="text" name="label" placeholder="Label, for example Bay 1 stick" aria-label="Label" maxlength="80"><button class="btn small" type="submit">Register this key</button></form></div>{% endfor %}</div>{% endif %}
+  <div class="tablewrap"><table class="t"><thead><tr><th>Label</th><th>Key ID</th><th>Added</th><th>Status</th><th></th></tr></thead><tbody>
+    {% for k in keys %}<tr><td>{{ k.label }}{% if k.is_demo %} {{ badge('demo', 'DEMO') }}{% endif %}</td><td class="mono">{{ k.key_id }}</td><td class="small">{{ k.created_at[:10] }}</td><td>{{ badge('active' if k.is_active else 'cancelled', 'Active' if k.is_active else 'Switched off') }}</td>
+      <td><form method="post" action="{{ url_for('admin.key_toggle', key_pk=k.id) }}" class="inline">{{ csrf() }}{% for kk, vv in keep.items() %}<input type="hidden" name="{{ kk }}" value="{{ vv }}">{% endfor %}<button class="btn ghost small" type="submit">{{ 'Switch off' if k.is_active else 'Switch on' }}</button></form></td></tr>
+    {% else %}<tr><td colspan="5" class="muted">No keys registered.</td></tr>{% endfor %}</tbody></table></div>
+  <form method="post" action="{{ url_for('admin.key_add') }}" class="mt">{{ csrf() }}{% for k, v in keep.items() %}<input type="hidden" name="{{ k }}" value="{{ v }}">{% endfor %}
+    <div class="grid2"><div class="field"><label for="label">Label</label><input id="label" name="label" type="text" maxlength="80" placeholder="Bay 1 stick"></div>
+      <div class="field"><label for="public_key">Public key (paste the whole .pem file)</label><textarea id="public_key" name="public_key" required placeholder="-----BEGIN PUBLIC KEY-----"></textarea></div></div>
+    <button class="btn small" type="submit">Register key</button></form>
+</div>
+
+<div class="panel"><h2>API tokens for processing stations</h2>
+  <p class="small muted">A station uses a token to send finished reports (see integrations/upload_report.py). Tokens can only send reports and read job tickets.</p>
+  <div class="tablewrap"><table class="t"><thead><tr><th>Name</th><th>Starts with</th><th>Last used</th><th>Status</th><th></th></tr></thead><tbody>
+    {% for t in tokens %}<tr><td>{{ t.name }}</td><td class="mono">{{ t.prefix }}...</td><td class="small">{{ t.last_used or 'never' }}</td><td>{{ badge('active' if t.is_active else 'cancelled', 'Active' if t.is_active else 'Revoked') }}</td>
+      <td>{% if t.is_active %}<form method="post" action="{{ url_for('admin.token_revoke', tok=t.id) }}" class="inline" data-confirm="Revoke this token? Stations using it stop working.">{{ csrf() }}{% for kk, vv in keep.items() %}<input type="hidden" name="{{ kk }}" value="{{ vv }}">{% endfor %}<button class="btn danger small" type="submit">Revoke</button></form>{% endif %}</td></tr>
+    {% else %}<tr><td colspan="5" class="muted">No tokens yet.</td></tr>{% endfor %}</tbody></table></div>
+  <form method="post" action="{{ url_for('admin.token_create') }}" class="row mt">{{ csrf() }}{% for k, v in keep.items() %}<input type="hidden" name="{{ k }}" value="{{ v }}">{% endfor %}
+    <input type="text" name="name" placeholder="Station name, for example Bay 1" aria-label="Station name" maxlength="80"><button class="btn small" type="submit">Create token</button></form>
+</div>
+{% endblock %}

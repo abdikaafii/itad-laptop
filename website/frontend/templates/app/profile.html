@@ -1,0 +1,21 @@
+{% extends 'partials/app_base.html' %}
+{% from 'partials/macros.html' import csrf %}
+{% block title %}Your profile{% endblock %}
+{% block body %}
+<div class="page-head"><h1>Your profile</h1></div>
+<div class="charts">
+  <form class="panel" method="post" action="{{ url_for('authentication.profile') }}">{{ csrf() }}<input type="hidden" name="action" value="name">
+    <h2>Details</h2>
+    <dl class="dl"><dt>Email</dt><dd>{{ me.email }}</dd><dt>Role</dt><dd>{{ ROLE_LABELS[me.role] }}</dd><dt>Company</dt><dd>{{ my_company.name if my_company else 'Whole platform' }}</dd></dl>
+    <div class="field mt"><label for="full_name">Your name</label><input id="full_name" name="full_name" type="text" required maxlength="120" value="{{ me.full_name }}"></div>
+    <button class="btn small" type="submit">Save</button>
+  </form>
+  <form class="panel" method="post" action="{{ url_for('authentication.profile') }}">{{ csrf() }}<input type="hidden" name="action" value="password">
+    <h2>Change password</h2>
+    <div class="field"><label for="current">Current password</label><input id="current" name="current" type="password" required autocomplete="current-password"></div>
+    <div class="field"><label for="password">New password</label><input id="password" name="password" type="password" required minlength="10" autocomplete="new-password"><div class="hint">At least 10 characters, upper and lower case, and a number. Other devices are signed out.</div></div>
+    <div class="field"><label for="confirm">Repeat new password</label><input id="confirm" name="confirm" type="password" required autocomplete="new-password"></div>
+    <button class="btn small" type="submit">Change password</button>
+  </form>
+</div>
+{% endblock %}

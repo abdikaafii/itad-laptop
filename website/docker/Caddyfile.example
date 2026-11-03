@@ -1,0 +1,4 @@
+# Simple HTTPS in front of the app. Replace the domain, then run Caddy (https://caddyserver.com).
+itad.example.com {
+    reverse_proxy 127.0.0.1:8000
+}

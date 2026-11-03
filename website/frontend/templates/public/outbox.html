@@ -1,0 +1,10 @@
+{% extends 'partials/public_base.html' %}
+{% block title %}Development outbox{% endblock %}
+{% block body %}
+<div class="wrap section">
+  <h1>Development outbox</h1>
+  <p class="flash error">Local development only. Switch this page off (ITAD_DEV_OUTBOX unset) on any shared server.</p>
+  {% for r in rows %}<div class="card mt"><strong>{{ r.subject }}</strong> <span class="muted small">to {{ r.to_addr }} &middot; {{ r.created_at }} UTC{% if r.sent %} &middot; sent{% elif r.error %} &middot; send failed: {{ r.error }}{% endif %}</span><pre class="mono">{{ r.body }}</pre></div>
+  {% else %}<p>No emails yet.</p>{% endfor %}
+</div>
+{% endblock %}

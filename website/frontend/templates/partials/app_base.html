@@ -1,0 +1,57 @@
+{% from 'partials/macros.html' import icon, logo_mark, flashes, csrf %}<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>{% block title %}Dashboard{% endblock %} | ITAD Platform</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='css/app.css') }}">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M16 2l12 4.5V15c0 7-5 12.2-12 15C9 27.2 4 22 4 15V6.5z' fill='%232563eb'/%3E%3C/svg%3E">
+</head>
+<body>
+{% set ep = request.endpoint or '' %}
+<div class="app">
+  <aside class="side" id="side" aria-label="Main menu">
+    <a class="brand" href="{{ url_for('dashboard.home') }}">{{ logo_mark() }}<span>ITAD Platform</span></a>
+    <a class="item {{ 'on' if ep == 'dashboard.home' }}" href="{{ url_for('dashboard.home') }}">{{ icon('dashboard') }}Dashboard</a>
+    <a class="item {{ 'on' if ep.startswith('assets.asset') }}" href="{{ url_for('assets.asset_list') }}">{{ icon('laptop') }}Laptops</a>
+    <a class="item {{ 'on' if ep.startswith('assets.job') }}" href="{{ url_for('assets.job_list') }}">{{ icon('jobs') }}Jobs</a>
+    <a class="item {{ 'on' if ep.startswith('certificates.') }}" href="{{ url_for('certificates.cert_list') }}">{{ icon('cert') }}Certificates</a>
+    <a class="item {{ 'on' if ep.startswith('reports.') }}" href="{{ url_for('reports.index') }}">{{ icon('reports') }}Reports</a>
+    {% if can_manage %}
+      <h6>Manage</h6>
+      {% if me.role == 'super_admin' %}
+        <a class="item {{ 'on' if ep == 'admin.companies' }}" href="{{ url_for('admin.companies') }}">{{ icon('building') }}Companies</a>
+      {% else %}
+        <a class="item {{ 'on' if ep == 'admin.company' }}" href="{{ url_for('admin.company') }}">{{ icon('building') }}Company &amp; keys</a>
+        <a class="item {{ 'on' if ep == 'admin.customers' }}" href="{{ url_for('admin.customers') }}">{{ icon('customers') }}Customers</a>
+      {% endif %}
+      <a class="item {{ 'on' if ep.startswith('admin.team') }}" href="{{ url_for('admin.team') }}">{{ icon('users') }}Team</a>
+      <a class="item {{ 'on' if ep == 'admin.audit' }}" href="{{ url_for('admin.audit') }}">{{ icon('log') }}Audit log</a>
+    {% endif %}
+    <h6>Public</h6>
+    <a class="item" href="{{ url_for('public.verify_form') }}">{{ icon('search') }}Verify a certificate</a>
+  </aside>
+  <div class="main">
+    <div class="topbar">
+      <button class="menu-btn" type="button" data-toggle-side aria-label="Menu">Menu</button>
+      <form class="search" method="get" action="{{ url_for('assets.asset_list') }}" role="search">
+        <label class="sr-only" for="q">Search laptops</label>
+        <input id="q" type="search" name="q" placeholder="Search serial, asset ID, job, customer..." value="{{ request.args.get('q', '') if ep == 'assets.asset_list' }}">
+      </form>
+      <div class="who">
+        <a href="{{ url_for('authentication.profile') }}"><strong>{{ me.full_name }}</strong></a>
+        <span class="badge b-open">{{ ROLE_LABELS[me.role] }}</span>
+        <form method="post" action="{{ url_for('authentication.logout') }}" class="inline">{{ csrf() }}<button class="btn ghost small" type="submit">Sign out</button></form>
+      </div>
+    </div>
+    <div class="content">
+      {{ flashes() }}
+      {% block body %}{% endblock %}
+    </div>
+  </div>
+</div>
+<script src="{{ url_for('static', filename='js/app.js') }}" defer></script>
+{% block scripts %}{% endblock %}
+</body>
+</html>

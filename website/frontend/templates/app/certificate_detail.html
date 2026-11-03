@@ -1,0 +1,37 @@
+{% extends 'partials/app_base.html' %}
+{% from 'partials/macros.html' import badge, csrf %}
+{% block title %}{{ c.number }}{% endblock %}
+{% block body %}
+{% set content = v.content %}
+<div class="page-head"><div><h1>Certificate <span class="mono">{{ c.number }}</span></h1>
+  <p class="mb0">{{ badge('revoked') if c.revoked else (badge('demo', 'DEMONSTRATION') if c.is_demo else badge('valid')) }}</p></div>
+  <div class="row no-print">
+    <a class="btn small" href="{{ url_for('certificates.cert_pdf', cert_id=c.id) }}">Download PDF</a>
+    <a class="btn ghost small" href="{{ url_for('certificates.cert_pdf', cert_id=c.id, inline=1) }}" target="_blank" rel="noopener">Open to print</a>
+    <button class="btn ghost small" type="button" data-print>Print this page</button>
+    <a class="btn ghost small" href="{{ url_for('certificates.cert_list') }}">Back</a></div></div>
+
+{% if v.state == 'tampered' %}<div class="alert bad"><strong>Integrity check failed.</strong> This certificate's stored content no longer matches its seal. Do not issue it to anyone and tell your administrator.</div>{% endif %}
+{% if v.state == 'valid' %}<div class="alert good"><strong>Seal intact.</strong> Content hash and server seal both match.</div>{% endif %}
+{% if c.revoked %}<div class="alert bad"><strong>Revoked {{ c.revoked_at[:10] }}.</strong> {{ c.revoked_reason }}</div>{% endif %}
+
+{% if content %}
+<div class="charts"><div class="panel"><h2>Certificate details</h2>
+  <dl class="dl">
+    <dt>Issued by</dt><dd>{{ content.company.name }}</dd><dt>Customer</dt><dd>{{ content.customer or '-' }}</dd><dt>Job reference</dt><dd>{{ content.job_ref }}</dd>
+    <dt>Device</dt><dd>{{ content.asset.manufacturer }} {{ content.asset.model }}</dd><dt>Serial number</dt><dd><a href="{{ url_for('assets.asset_detail', asset_id=asset.id) }}">{{ content.asset.serial }}</a></dd><dt>Asset ID</dt><dd>{{ content.asset.id or '-' }}</dd>
+    <dt>Storage device</dt><dd>{{ content.drive.model }}{% if content.drive.capacity_gb %}, {{ content.drive.capacity_gb|int }} GB{% endif %} ({{ content.drive.path }}), serial {{ content.drive.serial or '-' }}</dd>
+    <dt>Method</dt><dd>{{ content.sanitisation.method }}</dd><dt>Standard</dt><dd>{{ content.sanitisation.standard or content.sanitisation.level }}</dd>
+    <dt>Erased</dt><dd>{{ content.erasure.started }} to {{ content.erasure.finished }}</dd><dt>Verification</dt><dd>{{ 'Verified' if content.erasure.verified else 'Not verified' }} ({{ content.erasure.status }})</dd>
+    <dt>Technician</dt><dd>{{ content.technician or '-' }}</dd><dt>Source report</dt><dd class="mono">{{ content.source_report.sha256 }}<br>signature {{ content.source_report.signature }}, key {{ content.source_report.key_id }}</dd>
+  </dl></div>
+  <div class="panel"><h2>Record</h2>
+    <dl class="dl"><dt>Issued</dt><dd>{{ c.issued_at }} UTC</dd><dt>Issued by</dt><dd>{{ issuer.full_name if issuer else 'Automatic' }}</dd><dt>Seal</dt><dd class="mono">{{ c.content_sha256[:20] }}...</dd></dl>
+    <p class="mt"><a href="{{ url_for('public.verify_number', number=c.number) }}">Public verification page</a></p>
+    {% if me.role in ('super_admin', 'company_admin') and not c.revoked %}
+    <form method="post" action="{{ url_for('certificates.cert_revoke', cert_id=c.id) }}" class="mt no-print" data-confirm="Revoke this certificate? This cannot be undone.">{{ csrf() }}
+      <div class="field"><label for="reason">Reason for revoking</label><input id="reason" name="reason" type="text" required maxlength="300"></div>
+      <button class="btn danger small" type="submit">Revoke certificate</button></form>{% endif %}
+  </div></div>
+{% endif %}
+{% endblock %}

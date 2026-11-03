@@ -1,0 +1,21 @@
+{% extends 'partials/public_base.html' %}
+{% from 'partials/macros.html' import csrf, flashes %}
+{% block title %}Sign in | ITAD Platform{% endblock %}
+{% block body %}
+<div class="wrap"><div class="auth-box">
+  <h1>Sign in</h1>
+  <p class="muted">Technicians, administrators and customers use the same page.</p>
+  {{ flashes() }}
+  <form method="post" action="{{ url_for('authentication.login') }}">
+    {{ csrf() }}<input type="hidden" name="next" value="{{ next or '' }}">
+    <div class="field"><label for="email">Email</label><input id="email" name="email" type="email" required autocomplete="username" autofocus></div>
+    <div class="field"><label for="password">Password</label><input id="password" name="password" type="password" required autocomplete="current-password"></div>
+    <button class="btn w100" type="submit">Sign in</button>
+  </form>
+  {% if unverified %}
+  <form method="post" action="{{ url_for('authentication.resend_verification') }}" class="mt">{{ csrf() }}
+    <input type="hidden" name="email" value="{{ unverified }}"><button class="btn ghost small" type="submit">Send the verification email again</button></form>
+  {% endif %}
+  <p class="mt small"><a href="{{ url_for('authentication.forgot_password') }}">Forgot your password?</a> &middot; <a href="{{ url_for('authentication.register') }}">Register a company</a></p>
+</div></div>
+{% endblock %}

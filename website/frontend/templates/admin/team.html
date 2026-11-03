@@ -1,0 +1,15 @@
+{% extends 'partials/app_base.html' %}
+{% from 'partials/macros.html' import badge, csrf, pager %}
+{% block title %}Team{% endblock %}
+{% block body %}
+<div class="page-head"><h1>Team and users</h1><a class="btn small" href="{{ url_for('admin.team_new') }}">Invite a user</a></div>
+<form class="filters" method="get" action="{{ url_for('admin.team') }}"><div class="field"><label for="q">Search</label><input id="q" type="search" name="q" value="{{ request.args.get('q', '') }}" placeholder="Name or email"></div><button class="btn small" type="submit">Search</button></form>
+<div class="panel"><div class="tablewrap"><table class="t"><thead><tr><th>Name</th><th>Email</th><th>Role</th>{% if me.role == 'super_admin' %}<th>Company</th>{% endif %}<th>Status</th><th>Last sign-in</th><th></th></tr></thead><tbody>
+  {% for u in page.rows %}<tr><td><strong>{{ u.full_name }}</strong>{% if u.customer_name %}<br><span class="small muted">{{ u.customer_name }}</span>{% endif %}</td><td>{{ u.email }}</td><td>{{ ROLE_LABELS[u.role] }}</td>
+    {% if me.role == 'super_admin' %}<td>{{ u.company_name or 'Platform' }}</td>{% endif %}
+    <td>{{ badge('active' if u.is_active else 'cancelled', 'Active' if u.is_active else 'Switched off') }}{% if not u.email_verified %} {{ badge('warn', 'Not set up yet') }}{% endif %}</td>
+    <td class="small">{{ u.last_login or 'never' }}</td>
+    <td class="row">{% if u.id != me.id %}<form method="post" action="{{ url_for('admin.team_toggle', uid=u.id) }}" class="inline">{{ csrf() }}<button class="btn ghost small" type="submit">{{ 'Switch off' if u.is_active else 'Switch on' }}</button></form>{% endif %}
+      {% if not u.email_verified %}<form method="post" action="{{ url_for('admin.team_reinvite', uid=u.id) }}" class="inline">{{ csrf() }}<button class="btn ghost small" type="submit">Resend invite</button></form>{% endif %}</td></tr>
+  {% endfor %}</tbody></table></div>{{ pager(page, qs, 'admin.team') }}</div>
+{% endblock %}

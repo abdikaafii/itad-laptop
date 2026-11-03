@@ -1,0 +1,42 @@
+{% extends 'partials/app_base.html' %}
+{% from 'partials/macros.html' import badge %}
+{% block title %}Reports{% endblock %}
+{% block body %}
+<div class="page-head"><h1>Reports</h1></div>
+<div class="panel no-print"><h2>Choose a report</h2>
+  <div class="cards">
+    {% for k, label, desc, roles in types %}
+    <a class="card {{ 'on' if k == key }}" href="{{ url_for('reports.index', type=k) }}"><h3>{{ label }}</h3><p class="small muted mb0">{{ desc }}</p></a>
+    {% endfor %}
+  </div>
+  <p class="small muted mt mb0">Per-laptop reports (individual laptop report and hardware testing report) are on each laptop's page. Erasure certificates are on the Certificates page.</p>
+</div>
+
+{% if rep %}
+<form class="filters no-print" method="get" action="{{ url_for('reports.index') }}">
+  <input type="hidden" name="type" value="{{ key }}">
+  {% if key == 'monthly' %}<div class="field"><label for="month">Month</label><input id="month" name="month" type="text" placeholder="YYYY-MM" pattern="\d{4}-\d{2}" value="{{ filters.month }}"></div>
+  {% else %}
+    <div class="field"><label for="from">From</label><input id="from" type="date" name="from" value="{{ filters.get('from', '') }}"></div>
+    <div class="field"><label for="to">To</label><input id="to" type="date" name="to" value="{{ filters.to }}"></div>{% endif %}
+  {% if lists.customers and key in ('customer_assets', 'job_completion') and me.role != 'customer' %}<div class="field"><label for="customer">Customer</label><select id="customer" name="customer"><option value="">All</option>
+    {% for c in lists.customers %}<option value="{{ c.id }}" {{ 'selected' if filters.customer == c.id|string }}>{{ c.name }}</option>{% endfor %}</select></div>{% endif %}
+  {% if lists.companies %}<div class="field"><label for="company">Company</label><select id="company" name="company"><option value="">All</option>
+    {% for c in lists.companies %}<option value="{{ c.id }}" {{ 'selected' if filters.company == c.id|string }}>{{ c.name }}</option>{% endfor %}</select></div>{% endif %}
+  <button class="btn small" type="submit">Run report</button>
+</form>
+<div class="panel">
+  <div class="page-head"><div><h2>{{ rep.title }}</h2><p class="muted small mb0">{{ rep.subtitle }}</p></div>
+    <div class="row no-print">
+      <a class="btn small" href="{{ url_for('reports.export_pdf', key=key) }}?{{ request.query_string.decode() }}">PDF</a>
+      <a class="btn ghost small" href="{{ url_for('reports.export_pdf', key=key, inline=1) }}&amp;{{ request.query_string.decode() }}" target="_blank" rel="noopener">Open to print</a>
+      <a class="btn ghost small" href="{{ url_for('reports.export_csv', key=key) }}?{{ request.query_string.decode() }}">CSV</a>
+      <button class="btn ghost small" type="button" data-print>Print</button></div></div>
+  <div class="kpis">{% for k, v in rep.summary %}<div class="kpi"><b>{{ v }}</b><span>{{ k }}</span></div>{% endfor %}</div>
+  <div class="tablewrap"><table class="t"><thead><tr>{% for c in rep.columns %}<th>{{ c }}</th>{% endfor %}</tr></thead><tbody>
+    {% for r in rep.rows %}<tr>{% for c in r %}<td>{% if rep.columns[loop.index0]|lower == 'status' and c %}{{ badge(c|string|lower) }}{% else %}{{ c if c is not none and c != '' else '-' }}{% endif %}</td>{% endfor %}</tr>
+    {% else %}<tr><td colspan="{{ rep.columns|length }}" class="muted">No records for these filters.</td></tr>{% endfor %}
+  </tbody></table></div>
+</div>
+{% endif %}
+{% endblock %}

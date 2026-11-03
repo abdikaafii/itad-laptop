@@ -1,0 +1,15 @@
+{% extends 'partials/public_base.html' %}
+{% from 'partials/macros.html' import csrf, flashes %}
+{% block title %}Choose a password | ITAD Platform{% endblock %}
+{% block body %}
+<div class="wrap"><div class="auth-box">
+  <h1>Choose a password</h1>
+  {{ flashes() }}
+  <form method="post" action="{{ url_for('authentication.reset_password', token=token) }}">
+    {{ csrf() }}
+    <div class="field"><label for="password">New password</label><input id="password" name="password" type="password" required minlength="10" autocomplete="new-password" autofocus><div class="hint">At least 10 characters, upper and lower case, and a number.</div></div>
+    <div class="field"><label for="confirm">Repeat password</label><input id="confirm" name="confirm" type="password" required autocomplete="new-password"></div>
+    <button class="btn w100" type="submit">Save password</button>
+  </form>
+</div></div>
+{% endblock %}

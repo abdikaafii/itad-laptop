@@ -1,0 +1,6 @@
+Flask>=3.0,<4
+reportlab>=4.0
+cryptography>=42
+Pillow>=10
+gunicorn>=22
+pytest>=8

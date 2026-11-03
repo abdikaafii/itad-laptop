@@ -1,0 +1,24 @@
+# Run from the website/ folder:   docker compose -f docker/docker-compose.yml up -d --build
+# Needs a .env file next to this project (copy .env.example). ITAD_SECRET_KEY must be set.
+services:
+  itad:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    env_file: ../.env
+    environment:
+      ITAD_DATABASE: /data/itad.sqlite3
+      ITAD_UPLOAD_DIR: /data/uploads
+    volumes:
+      - itad_data:/data
+    ports:
+      - "127.0.0.1:8000:8000"   # only this machine; put an HTTPS reverse proxy (Caddy/nginx) in front
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  itad_data:

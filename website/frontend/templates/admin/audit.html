@@ -1,0 +1,11 @@
+{% extends 'partials/app_base.html' %}
+{% from 'partials/macros.html' import pager %}
+{% block title %}Audit log{% endblock %}
+{% block body %}
+<div class="page-head"><h1>Audit log</h1></div>
+<p class="muted small">Every sign-in, upload, certificate and change. Entries cannot be edited or deleted, even by the database.</p>
+<form class="filters" method="get" action="{{ url_for('admin.audit') }}"><div class="field"><label for="q">Search</label><input id="q" type="search" name="q" value="{{ request.args.get('q', '') }}" placeholder="Person, action, detail"></div><button class="btn small" type="submit">Search</button></form>
+<div class="panel"><div class="tablewrap"><table class="t"><thead><tr><th>Time (UTC)</th><th>Who</th><th>Action</th><th>Detail</th><th>From</th></tr></thead><tbody>
+  {% for r in page.rows %}<tr><td class="small nowrap">{{ r.ts }}</td><td>{{ r.actor }}</td><td>{{ r.action }}</td><td class="small">{{ r.detail }}</td><td class="small muted">{{ r.ip }}</td></tr>
+  {% else %}<tr><td colspan="5" class="muted">Nothing logged yet.</td></tr>{% endfor %}</tbody></table></div>{{ pager(page, qs, 'admin.audit') }}</div>
+{% endblock %}
