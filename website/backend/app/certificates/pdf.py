@@ -11,7 +11,7 @@ from reportlab.platypus import KeepTogether, Paragraph, Spacer, Table, TableStyl
 from ..core import pdfkit as K
 
 
-def _qr(url, size=34 * mm):
+def _qr(url, size=28 * mm):
     widget = QrCodeWidget(url)
     x0, y0, x1, y1 = widget.getBounds()
     d = Drawing(size, size, transform=[size / (x1 - x0), 0, 0, size / (y1 - y0), 0, 0])
@@ -28,16 +28,16 @@ def render_certificate_pdf(cert, company):
         Spacer(1, 2 * mm),
         K.P("Certificate number  %s" % cert["number"], size=12, bold=True, color=K.BLUE),
         K.P("Issued %s UTC" % cert["issued_at"], size=8.5, color=K.MUTED),
-        Spacer(1, 5 * mm),
+        Spacer(1, 3 * mm),
         K.P("This certifies that the storage device described below was sanitised and that the "
             "result was verified, as recorded by the ITAD erasure engine and signed on the "
             "processing station.", size=9.5, color=K.INK, leading=13),
-        Spacer(1, 5 * mm),
+        Spacer(1, 3 * mm),
     ]
 
     def section(title, rows):
         return KeepTogether([K.P(title.upper(), size=8, bold=True, color=K.BLUE), Spacer(1, 1 * mm),
-                             K.kv_table(rows, width), Spacer(1, 4 * mm)])
+                             K.kv_table(rows, width, pad=2.4), Spacer(1, 2.5 * mm)])
 
     a, d, s, e = c["asset"], c["drive"], c["sanitisation"], c["erasure"]
     story += [
@@ -67,7 +67,7 @@ def render_certificate_pdf(cert, company):
                       "number is genuine and has not been altered or withdrawn.", size=8.5,
                       color=K.MUTED, leading=11),
                   Spacer(1, 2 * mm), K.P(url, size=8.5, bold=True, color=K.BLUE)]]],
-               colWidths=[38 * mm, width - 38 * mm])
+               colWidths=[32 * mm, width - 32 * mm])
     qr.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
                             ("BOX", (0, 0), (-1, -1), 0.6, K.LINE),
                             ("BACKGROUND", (0, 0), (-1, -1), K.SOFT),
@@ -84,6 +84,5 @@ def render_certificate_pdf(cert, company):
     watermark = "REVOKED" if cert["revoked"] else ("DEMONSTRATION" if cert["is_demo"] else "")
     return K.build(story, "Certificate of Data Erasure", co["name"],
                    logo=K.logo_path(current_app.config["UPLOAD_DIR"], company), watermark=watermark,
-                   footer_note="%s  |  %s%s" % (cert["number"], url,
-                                                "  |  DEMONSTRATION RECORD - NOT A REAL ERASURE"
-                                                if cert["is_demo"] else ""))
+                   footer_note="%s%s" % (cert["number"], "  |  DEMONSTRATION RECORD - NOT A REAL ERASURE"
+                                         if cert["is_demo"] else "  |  Verify at /verify"))

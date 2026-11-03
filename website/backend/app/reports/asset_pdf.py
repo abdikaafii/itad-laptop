@@ -73,7 +73,7 @@ def render_asset_pdf(asset, hardware_only=False):
         story.append(_section("Data erasure", K.data_table(
             ["Drive", "Model", "GB", "Method", "Result", "Verified", "Finished"],
             rows or [["No erasure records", "", "", "", "", "", ""]],
-            [22 * mm, 36 * mm, 12 * mm, 52 * mm, 24 * mm, 14 * mm, 22 * mm])))
+            [26 * mm, 30 * mm, 14 * mm, 46 * mm, 20 * mm, 18 * mm, 22 * mm])))
     story.append(_section("Hardware tests", _tests_table(asset["id"])))
     if rep:
         story.append(_section("Evidence", K.kv_table([

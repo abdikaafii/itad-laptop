@@ -60,7 +60,7 @@ def P(text, **kw):
     return Paragraph(esc(text), style("p%d" % id(kw), **kw))
 
 
-def kv_table(rows, width, label_w=48 * mm):
+def kv_table(rows, width, label_w=48 * mm, pad=4):
     """Two-column label/value table with light rules."""
     data = [[P(k, size=8.5, color=MUTED), P(v if v not in (None, "") else "-", size=9.5)]
             for k, v in rows]
@@ -68,7 +68,7 @@ def kv_table(rows, width, label_w=48 * mm):
     t.setStyle(TableStyle([
         ("VALIGN", (0, 0), (-1, -1), "TOP"),
         ("LINEBELOW", (0, 0), (-1, -1), 0.4, LINE),
-        ("TOPPADDING", (0, 0), (-1, -1), 4), ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+        ("TOPPADDING", (0, 0), (-1, -1), pad), ("BOTTOMPADDING", (0, 0), (-1, -1), pad),
         ("LEFTPADDING", (0, 0), (-1, -1), 0)]))
     return t
 
@@ -132,7 +132,7 @@ def draw_page(canvas, doc, title, company_name, logo=None, watermark="", footer_
     canvas.line(14 * mm, 12 * mm, w - 14 * mm, 12 * mm)
     canvas.setFillColor(MUTED)
     canvas.setFont(f, 7)
-    canvas.drawString(14 * mm, 8 * mm, footer_note[:150])
+    canvas.drawString(14 * mm, 8 * mm, footer_note[:118])
     canvas.drawRightString(w - 14 * mm, 8 * mm, "Page %d" % doc.page)
     if watermark:
         canvas.setFillColor(colors.Color(0.75, 0.1, 0.1, alpha=0.13))
