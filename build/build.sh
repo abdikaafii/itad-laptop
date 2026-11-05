@@ -68,7 +68,7 @@ printf '%s\n' plymouth plymouth-themes xorg xinit openbox xterm python3 \
   ntfs-3g alsa-utils network-manager wpasupplicant smartmontools dmidecode hdparm \
   nvme-cli pciutils usbutils lshw iw rfkill parted fonts-dejavu-core zstd \
   bluez python3-cryptography ffmpeg v4l-utils firmware-sof-signed alsa-ucm-conf \
-  dosfstools exfatprogs \
+  dosfstools exfatprogs ca-certificates \
   > "$CFG/package-lists/itad.list.chroot"
 
 # NICE-TO-HAVE packages: installed one by one by a hook (step 4).

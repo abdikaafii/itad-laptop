@@ -163,8 +163,13 @@ try:
 except Exception:
     TZ = None
 
-VERSION = "1.11.0"
+VERSION = "1.12.0"
 TOOLS_DIR = os.path.dirname(os.path.abspath(__file__))
+
+try:                      # sending reports to SealHub is optional
+    import sealhub_upload
+except Exception:
+    sealhub_upload = None
 
 # --- THESE ARE THE FILES THIS GUI WILL RUN ---
 CHECK = os.path.join(TOOLS_DIR, "laptop_check.py")    # The MDM/Autopilot scanner
@@ -5596,6 +5601,45 @@ class App:
             "warn" if saved else "bad"),
             "Saved TXT + PDF" if has_pdf else (
                 "Saved (no PDF)" if saved else "Not saved"))
+        self.sealhub_send(rep, saved)
+
+    def sealhub_send(self, rep, saved):
+        """Send the saved report to SealHub in the background. The report is
+        already safe on the USB, so this can never lose it, never freezes the
+        window, and a problem here only shows as one line on the report screen."""
+        if not (sealhub_upload and saved):
+            return
+        rdir = getattr(self, "saved_where", "") or self.report_dir()
+        self.sh_busy = True
+        self.sealhub_line("SealHub: sending...", MUTED)
+
+        def work():
+            try:
+                res = sealhub_upload.send_report(rep, saved, self.out_dir, rdir)
+            except Exception as e:
+                res = {"state": "error", "text": "SealHub: unexpected problem "
+                       "(%s). The report is saved on the USB." % str(e)[:80]}
+            self.q.put(lambda: self.sealhub_done(res))
+        threading.Thread(target=work, daemon=True).start()
+
+    def sealhub_line(self, text, colour):
+        """Show the SealHub status as the last line under the saved message."""
+        try:
+            base = self.r_files.cget("text").split("\nSealHub")[0]
+            cur = self.r_files.cget("fg")
+            # only a SealHub problem may change the colour, and only when
+            # nothing worse (a red "not saved" warning) is already showing
+            fg = WARN if (colour == WARN and cur == MUTED) else cur
+            self.r_files.configure(text=base + "\n" + text, fg=fg)
+        except Exception:
+            pass
+
+    def sealhub_done(self, res):
+        self.sh_busy = False
+        state = res.get("state")
+        self.log.append(res.get("text", ""))
+        self.sealhub_line(res.get("text", ""),
+                          OK if state in ("sent", "duplicate") else WARN)
 
     def report_dir(self):
         """reports folder on the stick (same as SwitchSeal)."""
@@ -5823,6 +5867,13 @@ class App:
                     "Report not saved",
                     "The report for this laptop is NOT saved on USB B.\n\n"
                     "Shut down anyway? The report will be lost."):
+                return
+        if getattr(self, "sh_busy", False):
+            if not self.mb.askyesno(
+                    "Still sending",
+                    "The report is still being sent to SealHub.\n\n"
+                    "It is saved on the USB and will be sent next time, but "
+                    "waiting a few seconds is better.\n\nShut down anyway?"):
                 return
         if self.mb.askyesno("Shut down", "Shut down this laptop now?"):
             if subprocess.call(["systemctl", "poweroff"]) != 0:
