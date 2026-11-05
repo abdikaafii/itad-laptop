@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-sealhub_upload.py - send finished reports to SealHub (v1.0.0)
+sealhub_upload.py - send finished reports to SealHub (v1.1.0)
 
-Used by LaptopSeal (laptop_window.py). Plain Python 3, no extra packages.
+Used by LaptopSeal, PhoneSeal and SwitchSeal (the same file in all three). Plain Python 3, no extra packages.
 Nothing in here may ever stop a report from being saved: every public
 function catches its own errors and returns a result instead.
 
@@ -39,13 +39,13 @@ import urllib.error
 import urllib.request
 from datetime import datetime, timezone
 
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 CONF_NAME = "sealhub.conf"
 QUEUE_SUFFIX = ".sealhub.json"
 ATTACH_EXT = (".pdf", ".txt", ".json")
 MAX_ATTACH = 10 * 1024 * 1024
 TIMEOUT = 60
-UA = "LaptopSeal-SealHub/" + VERSION
+UA = "Seal-SealHub/" + VERSION
 
 
 # --------------------------------------------------------------------------
@@ -100,7 +100,7 @@ def load_config(out_dir, extra=()):
 
 
 # --------------------------------------------------------------------------
-# turn a LaptopSeal report into a SealHub report
+# turn a Seal report (laptop, phone or switch) into a SealHub report
 # --------------------------------------------------------------------------
 def _clean(v, n=300):
     return str(v if v is not None else "").replace("\r", " ").replace("\n", "; ").strip()[:n]
@@ -127,8 +127,171 @@ def _tested_at(rep):
         return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def build_payload(rep):
-    """SealHub version of one LaptopSeal report (a dict, ready for JSON)."""
+def _uid(rep, serial):
+    """Stable id: saving the same finished report again must never make a second one."""
+    return hashlib.sha256(("%s|%s|%s|%s" % (
+        serial, rep.get("job_id"), rep.get("started"), rep.get("finished"))).encode()).hexdigest()[:40]
+
+
+def detect_kind(rep):
+    if isinstance(rep.get("device"), dict) and "ios" in rep["device"]:
+        return "switch"
+    if isinstance(rep.get("device"), dict):
+        return "phone"
+    return "laptop"
+
+
+def build_payload(rep, kind=None):
+    """SealHub version of one report (a dict, ready for JSON)."""
+    kind = kind or detect_kind(rep)
+    if kind == "phone":
+        return _payload_phone(rep)
+    if kind == "switch":
+        return _payload_switch(rep)
+    return _payload_laptop(rep)
+
+
+def _payload_phone(rep):
+    d = rep.get("device") or {}
+    overall = str(rep.get("overall") or "").upper()
+    result = overall if overall in ("PASS", "FAIL") else "REVIEW"
+    imeis = [str(x) for x in (d.get("imei") or []) if x]
+    serial = _clean(d.get("serial") or (imeis[0] if imeis else "") or rep.get("asset_id") or "UNKNOWN", 80)
+    summary = "; ".join(str(r) for r in (rep.get("reasons") or []))[:380]
+    if overall and result == "REVIEW":
+        summary = ("%s. %s" % (overall.capitalize(), summary)).strip()
+    if rep.get("test_mode"):
+        summary = ("TEST MODE - not for customer use. " + summary).strip()
+    if not summary and result == "PASS":
+        summary = "All checks and tests passed."
+
+    hardware = {}
+    _put(hardware, "Make and model", "%s %s" % (d.get("make") or "", d.get("model") or ""))
+    _put(hardware, "Model ID", d.get("model_id"))
+    _put(hardware, "Serial", d.get("serial"))
+    _put(hardware, "IMEI", ", ".join(imeis))
+    _put(hardware, "OS", d.get("os"))
+    if d.get("storage_gb"):
+        hardware["Storage"] = "%s GB" % d.get("storage_gb")
+    bat = []
+    if d.get("battery_health_pct") is not None:
+        bat.append("health %s%%" % d["battery_health_pct"])
+    if d.get("battery_cycles") is not None:
+        bat.append("%s cycles" % d["battery_cycles"])
+    if d.get("battery_level"):
+        bat.append("charge %s%%" % d["battery_level"])
+    _put(hardware, "Battery", ", ".join(bat))
+    for item in d.get("details") or []:
+        try:
+            _sec, lab, val = item
+        except (TypeError, ValueError):
+            continue
+        if _clean(lab, 60) and _clean(lab, 60) not in hardware:
+            _put(hardware, _clean(lab, 60), val)
+        if len(hardware) >= 40:
+            break
+
+    checks = {}
+    for c in rep.get("checks") or []:
+        line = _clean(c.get("result"), 20)
+        if c.get("detail"):
+            line += " - " + _clean(c.get("detail"), 160)
+        _put(checks, _clean(c.get("name"), 60) or "Check", line)
+    if rep.get("passcode_unknown"):
+        checks["Passcode"] = "Unknown - component tests could not be done"
+
+    w = rep.get("wipe") or {}
+    wipe = {}
+    _put(wipe, "Status", w.get("state"))
+    _put(wipe, "Method", w.get("method"))
+    _put(wipe, "Verification", w.get("verify_note"))
+    _put(wipe, "Started", w.get("started"))
+    _put(wipe, "Finished", w.get("finished"))
+    _put(wipe, "Duration", w.get("duration"))
+
+    tests = []
+    for t in rep.get("tests") or []:
+        item = {"name": _clean(t.get("component") or "-", 60), "result": _clean(t.get("status"), 20)}
+        note = _clean("; ".join(str(n) for n in (t.get("notes") or [])), 200)
+        if note:
+            item["note"] = note
+        tests.append(item)
+
+    obs = rep.get("observations") or {}
+    bits = []
+    if obs.get("grade"):
+        bits.append("Cosmetic grade: %s." % obs.get("grade"))
+    if str(obs.get("notes") or "").strip():
+        bits.append("Notes: %s" % str(obs.get("notes")).strip())
+
+    data = {}
+    for key, val in (("hardware", hardware), ("checks", checks), ("wipe", wipe)):
+        if val:
+            data[key] = val
+    if tests:
+        data["tests"] = tests
+    if bits:
+        data["observations"] = " ".join(bits)[:1500]
+    _put(data, "Location", rep.get("location"))
+    _put(data, "Company", rep.get("company"))
+    _put(data, "Job started", rep.get("started"))
+    _put(data, "Job duration", rep.get("duration"))
+    _put(data, "Erasure ID", rep.get("erasure_id"))
+    _put(data, "Tool", "PhoneSeal %s" % (rep.get("version") or ""))
+    if (rep.get("integrity") or {}).get("signed"):
+        data["Digitally signed"] = "Yes (see the attached .json file)"
+    return {"uid": _uid(rep, serial), "device_type": "phone", "serial": serial,
+            "asset_id": _clean(rep.get("asset_id"), 80), "job_id": _clean(rep.get("job_id"), 80),
+            "technician": _clean(rep.get("technician"), 80), "result": result, "summary": summary,
+            "tested_at": _tested_at(rep), "data": data}
+
+
+def _payload_switch(rep):
+    d = rep.get("device") or {}
+    result = "PASS" if str(rep.get("overall") or "").upper() == "PASS" else "FAIL"
+    serial = _clean(d.get("serial") or "UNKNOWN", 80)
+    summary = "; ".join(str(r) for r in (rep.get("reasons") or []))[:380]
+    if not summary and result == "PASS":
+        summary = "Switch wiped to factory defaults and verified."
+
+    hardware = {}
+    _put(hardware, "Make and model", "%s %s" % (d.get("make") or "", d.get("model") or ""))
+    _put(hardware, "IOS version", d.get("ios"))
+    if d.get("ports") is not None:
+        hardware["Ports"] = "%s detected, %s with link" % (d.get("ports"), d.get("linked"))
+    for i, line in enumerate(d.get("port_lines") or [], start=1):
+        _put(hardware, "Port type %d" % i, line)
+
+    wipe = {}
+    wipe["Status"] = "Wiped" if rep.get("boot_ok") else "Switch did not come back after reload"
+    _put(wipe, "Started", rep.get("wipe_started"))
+    _put(wipe, "Finished", rep.get("wipe_finished"))
+    for i, step in enumerate(rep.get("sanitisation") or [], start=1):
+        _put(wipe, "Step %d" % i, step)
+    _put(wipe, "Console log SHA-256", rep.get("console_log_sha256"), 80)
+
+    checks = {"Switch came back after reload": "PASS" if rep.get("boot_ok") else "FAIL"}
+    for c in rep.get("checks") or []:
+        _put(checks, _clean(c.get("name"), 90) or "Check", c.get("result"))
+
+    data = {"hardware": hardware, "checks": checks, "wipe": wipe}
+    if str(rep.get("observation") or "").strip():
+        data["observations"] = _clean(rep.get("observation"), 1500)
+    _put(data, "Location", rep.get("location"))
+    _put(data, "Company", rep.get("company"))
+    _put(data, "Job started", rep.get("started"))
+    _put(data, "Erasure ID", rep.get("erasure_id"))
+    _put(data, "Tool", "SwitchSeal %s" % (rep.get("version") or ""))
+    if (rep.get("integrity") or {}).get("signed"):
+        data["Digitally signed"] = "Yes (see the attached .json file)"
+    return {"uid": _uid(rep, serial), "device_type": "switch", "serial": serial,
+            "asset_id": _clean(rep.get("asset_id"), 80), "job_id": _clean(rep.get("job_id"), 80),
+            "technician": _clean(rep.get("technician"), 80), "result": result, "summary": summary,
+            "tested_at": _tested_at(rep), "data": data}
+
+
+def _payload_laptop(rep):
+    """SealHub version of one LaptopSeal report."""
     overall = str(rep.get("overall") or "").upper()
     result = overall if overall in ("PASS", "FAIL") else "REVIEW"
     reasons = [str(r).split(":")[0] for r in (rep.get("reasons") or [])]
@@ -212,8 +375,7 @@ def build_payload(rep):
     data.update(extra)
 
     # Stable id: saving the same finished report again must never make a second one.
-    uid = hashlib.sha256(("%s|%s|%s|%s" % (
-        rep.get("serial"), rep.get("job_id"), rep.get("started"), rep.get("finished"))).encode()).hexdigest()[:40]
+    uid = _uid(rep, rep.get("serial"))
     return {
         "uid": uid, "device_type": "laptop",
         "serial": _clean(rep.get("serial") or "UNKNOWN", 80),
@@ -238,11 +400,11 @@ def _done(path):
     return os.path.exists(path + ".sent") or os.path.exists(path + ".rejected")
 
 
-def queue_report(rep, report_dir, base):
+def queue_report(rep, report_dir, base, kind=None):
     """Write <base>.sealhub.json next to the report. Returns its path, or ''.
     Saving the same report again (same id) does not queue a second copy."""
     try:
-        payload = build_payload(rep)
+        payload = build_payload(rep, kind)
         for old in _queue_files(report_dir):
             try:
                 with open(old, encoding="utf-8") as fh:
@@ -305,7 +467,7 @@ def _connection_text(exc):
     return "no network connection"
 
 
-def send_report(rep, saved, out_dir, report_dir):
+def send_report(rep, saved, out_dir, report_dir, kind=None):
     """Queue this report and send everything that is waiting. Never raises.
 
     Returns {"state": ..., "text": ...} where state is one of
@@ -318,9 +480,9 @@ def send_report(rep, saved, out_dir, report_dir):
                 base = os.path.splitext(os.path.basename(p))[0]
                 break
         if not base:
-            base = "SN_%s_%s" % (_clean(rep.get("serial") or "UNKNOWN", 40).replace("/", "_"),
+            base = "SN_%s_%s" % (_clean(build_payload(rep, kind)["serial"], 40).replace("/", "_"),
                                  datetime.now().strftime("%Y%m%d-%H%M%S"))
-        queued = queue_report(rep, report_dir, base)
+        queued = queue_report(rep, report_dir, base, kind)
         url, token, problem = load_config(out_dir, extra=[report_dir])
         if problem == "missing":
             return {"state": "not_set_up",
