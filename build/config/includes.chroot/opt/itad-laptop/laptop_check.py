@@ -1,7 +1,15 @@
 #!/usr/bin/env python3
 """
-laptop_check.py - ITAD pre-wipe check (v3.1.8)  MULTI-PLATFORM
+laptop_check.py - ITAD pre-wipe check (v3.1.9)  MULTI-PLATFORM
 READ ONLY. Never wipes or writes to any internal drive.
+
+v3.1.9: False-alarm fix (ThinkPad). The word "computrace" / "absolute" found
+        ONLY inside the BIOS main tables (DSDT / SSDT) is no longer a hard
+        BLOCKED: many BIOS files contain the Absolute module name even when
+        it is not active. It now ends as CANNOT CHECK ("verify in BIOS",
+        manager decision). It is still BLOCKED when the WPBT table, a UEFI
+        Absolute variable, the word in the BIOS strings, the word in any
+        other firmware table, or Absolute files on the disk are found.
 
 v3.1.8: A blank or already-wiped drive no longer ends as CANNOT CHECK.
         If the internal drive was read fine and simply has no operating
@@ -41,7 +49,7 @@ try:
 except Exception:
     NOW = datetime.now()
 
-VERSION = "3.1.8"
+VERSION = "3.1.9"
 
 BAD_SERIALS = {
     "", "none", "default string", "to be filled by o.e.m.",
@@ -818,8 +826,19 @@ def check_firmware_absolute():
             if w in low:
                 bios_hit.append(w.decode())
                 break
+    # v3.1.9: a word only in the BIOS main tables (DSDT / SSDT / PSDT), with
+    # no WPBT table, no UEFI variable and no BIOS-string hit, is not proof of
+    # an active Absolute (the BIOS just contains the module name).
+    strong = bool(wpbt or efi or bios_hit or
+                  any(not t.upper().startswith(("DSDT", "SSDT", "PSDT"))
+                      for w, t in words_hit))
     for w, t in words_hit:
-        signs.append("Word '%s' in firmware table %s" % (w, t))
+        if strong:
+            signs.append("Word '%s' in firmware table %s" % (w, t))
+        else:
+            warns.append("Word '%s' only in BIOS table %s, no WPBT table: "
+                         "verify in BIOS (Security menu, Absolute "
+                         "Persistence)" % (w, t))
     for v in efi:
         signs.append("UEFI variable: %s" % v)
     for w in bios_hit:
@@ -1192,6 +1211,7 @@ def main():
     win_roots, mac_roots = [], []
     win_parts, mac_parts = [], []
     abs_signs, warns = [], []
+    fw_soft = []     # v3.1.9: word only in DSDT/SSDT -> CANNOT CHECK
     autopilot_analysis = {"state": "NONE", "active": [], "past": [],
                           "tenant": [], "mdm": [], "azure_ad": []}
     mac_enrol = []
@@ -1201,6 +1221,7 @@ def main():
         fw_s, fw_w = check_firmware_absolute()
         abs_signs.extend(fw_s)
         warns.extend(fw_w)
+        fw_soft.extend(x for x in fw_w if x.startswith("Word '"))
         if fw_s:
             st.fail("%d sign(s) found" % len(fw_s))
         elif fw_w:
@@ -1310,7 +1331,8 @@ def main():
                         "already wiped)")
 
     cannot = (list(encrypted) + list(unreadable) + list(disk_notes)
-              + ["Partition not checked: %s" % p for p in odd_parts])
+              + ["Partition not checked: %s" % p for p in odd_parts]
+              + list(fw_soft))
     if platform == "chromebook":
         cannot.append("ChromeOS — check Settings > About ChromeOS > "
                       "Additional details > Enterprise enrollment")
