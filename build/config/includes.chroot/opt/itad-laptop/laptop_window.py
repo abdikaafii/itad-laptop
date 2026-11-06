@@ -221,6 +221,10 @@ STD_SCREENS = [10.1, 11.6, 12.0, 12.3, 12.5, 13.0, 13.3, 13.4, 13.5, 13.6,
                14.0, 14.5, 15.0, 15.6, 16.0, 16.1, 17.0, 17.3, 18.0]
 STD_RAM_GB = [1, 2, 3, 4, 6, 8, 12, 16, 20, 24, 32, 36, 40, 48, 64, 96, 128,
               192, 256]
+# TEMPORARY: the Asset ID is filled from the detected serial number but can
+# still be edited by hand. Set to False to lock it again once a serial is found.
+ASSET_ID_EDITABLE = True
+
 LOCATIONS = ["Warehouse DPA3 Test Bay 1", "Warehouse DPA3 Test Bay 2",
              "Warehouse DPA3 Test Bay 3", "Warehouse DPA3 Test Bay 4", "Other"]
 AUTO_TESTS = "cpu,ram,drive,battery,wifi,ethernet,bluetooth"
@@ -3514,7 +3518,7 @@ class App:
                    True),
                   ("Job ID", "entry", self.v_job, None, False),
                   ("Asset ID", "entry", self.v_asset, None,
-                   bool(self.s["serial"])),
+                   bool(self.s["serial"]) and not ASSET_ID_EDITABLE),
                   ("Location", "combo", self.v_loc, LOCATIONS, False)]
         for c, (name, kind, var, vals, ro) in enumerate(fields):
             cell = tk.Frame(form, bg=NAVY, highlightbackground=BORDER,
@@ -3531,7 +3535,9 @@ class App:
                 w = self.entry(cell, var, readonly=ro)
             w.pack(fill="x", padx=self.px(14), pady=(0, self.px(12)),
                    ipady=self.px(3))
-        hint = ("Asset ID is filled from the serial number."
+        hint = (("Asset ID is filled from the serial number. You can edit it."
+                 if ASSET_ID_EDITABLE else
+                 "Asset ID is filled from the serial number.")
                 if self.s["serial"] else
                 "No usable serial number found: type the Asset ID.")
         self.lbl(pg, hint, 10, fg=MUTED, bg=BG).pack(
