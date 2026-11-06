@@ -163,7 +163,7 @@ try:
 except Exception:
     TZ = None
 
-VERSION = "1.12.0"
+VERSION = "1.13.0"
 TOOLS_DIR = os.path.dirname(os.path.abspath(__file__))
 
 try:                      # sending reports to SealHub is optional
@@ -1456,7 +1456,29 @@ def advice(data, manufacturer, bios):
                                 "on) > Security > Absolute / Computrace")
     tech, cust = [], []
     bios_txt = "; ".join("%s = %s" % (n, v) for n, v in bios[:3])
-    if "absolute" in kinds:
+    if not bios_txt:
+        # v3.2.0: the check already read the BIOS setting
+        bios_txt = "; ".join("%s = %s" % (n, v or "?") for n, v in
+                             ((data or {}).get("absolute_bios") or [])[:3])
+    action = (data or {}).get("absolute_action", "")
+    if "absolute" in kinds and action == "disable_in_bios":
+        # Absolute is switched ON in the BIOS but no customer has activated
+        # it yet: the technician can switch it off here.
+        tech += ["Do NOT wipe yet: Absolute (Computrace) is ENABLED in the "
+                 "BIOS. Disable it first.",
+                 "1. Restart and open the BIOS: %s." % where,
+                 "2. Set Absolute / Computrace to Disable (or Permanently "
+                 "Disable - it can then never be turned back on). Save and "
+                 "exit.",
+                 "3. Boot LaptopSeal again and press Run check again. The "
+                 "wipe is allowed when Absolute shows CLEAR.",
+                 "If the option is greyed out, Absolute has been activated "
+                 "by a customer: it can NOT be turned off here and the "
+                 "customer must release it (the check will then say "
+                 "ACTIVE)."]
+        if bios_txt:
+            tech.append("BIOS setting read now: %s." % bios_txt)
+    elif "absolute" in kinds:
         tech += ["Do NOT wipe. This laptop is ON HOLD.",
                  "Absolute is ACTIVE - the laptop still reports to the "
                  "customer's Absolute account.",
@@ -1489,25 +1511,48 @@ def advice(data, manufacturer, bios):
     if "chrome" in kinds:
         cust += ["Google Admin console > Devices > Chrome > Devices > "
                  "serial {serial} > Deprovision."]
-    if result == "BLOCKED":
+    only_bios_action = (result == "BLOCKED" and kinds == {"absolute"}
+                        and action == "disable_in_bios")
+    if only_bios_action:
+        pass   # the steps above are all the technician has to do
+    elif result == "BLOCKED":
         tech += ["A removal request for the customer has been saved "
                  "(see below). Send it, wait for their reply, then press "
                  "Run check again."]
+        if "absolute" not in kinds and \
+                (data or {}).get("absolute_result") == "CANNOT CHECK":
+            # blocked for another reason, and Absolute is still unknown
+            tech += ["Also check Absolute: LaptopSeal could not read it on "
+                     "this laptop. Open the BIOS (%s). If Absolute / "
+                     "Computrace is ENABLED, disable it before the wipe." %
+                     where]
     elif result == "CLEAR":
         tech += ["Clear: you can wipe."]
         low = bios_txt.lower()
-        if bios and not any(w in low for w in ("permanent", "disabled")):
+        bios_known = bool(bios) or bool((data or {}).get("absolute_bios"))
+        if bios_known and not any(w in low for w in ("permanent", "disabled")):
             tech.append("Optional: Absolute is not active but not "
                         "permanently disabled. %s > Permanently Disable "
                         "(this can never be turned back on)." % where)
-        elif not bios:
+        elif not bios_known:
             tech.append("Optional: check the BIOS (%s). If Absolute is "
                         "not activated you can set Permanently Disable "
                         "(can never be turned back on)." % where)
     else:
         tech += ["The check could not read everything (for example an "
-                 "encrypted drive). Ask a manager before wiping.",
-                 "BIOS: %s - check the Absolute state there." % where]
+                 "encrypted drive). Ask a manager before wiping."]
+        if (data or {}).get("absolute_result") == "CANNOT CHECK":
+            # v3.2.0: say exactly what to do about Absolute
+            tech += ["Absolute: this laptop does not show its Absolute "
+                     "setting to LaptopSeal, so the technician must look.",
+                     "Open the BIOS: %s." % where,
+                     "If Absolute / Computrace is ENABLED: set it to "
+                     "Disable (or Permanently Disable), save, boot "
+                     "LaptopSeal and run the check again.",
+                     "If it already says Disabled, Permanently Disabled or "
+                     "Not Active: carry on once a manager approves."]
+        else:
+            tech.append("BIOS: %s - check the Absolute state there." % where)
     return tech, cust
 
 
@@ -3718,7 +3763,14 @@ class App:
             txt += "\n\nCUSTOMER MUST DO:\n" + "\n".join(
                 "  -  " + c.replace("{serial}", ser) for c in cust)
         self.c_help.configure(text=txt)
-        if data.get("result") == "BLOCKED":
+        # Absolute enabled but not activated: the technician switches it off
+        # in the BIOS, so there is nothing to ask the customer.
+        bios_only = (blocked_kinds(data) == {"absolute"} and
+                     data.get("absolute_action") == "disable_in_bios")
+        if bios_only:
+            self.s["removal_request"] = ""
+            self.c_req.configure(text="")
+        elif data.get("result") == "BLOCKED":
             path = write_removal_request(self.out_dir, ident, data,
                                          self.tech(), self.job(),
                                          self.asset())
@@ -3793,7 +3845,14 @@ class App:
         ar = data.get("absolute_result", "?")
         er = data.get("autopilot_result", "?")
         colors = {"CLEAR": OK, "CLEAN": OK, "BLOCKED": BAD}
-        self.c_abs.configure(text=ar, fg=colors.get(ar, WARN))
+        # v3.2.0: say what the BIOS itself reports about Absolute
+        act = data.get("absolute_action", "")
+        bstate = data.get("absolute_bios_state", "")
+        bsets = "; ".join("%s = %s" % (n, v or "?") for n, v in
+                          (data.get("absolute_bios") or [])[:3])
+        ar_text = {"disable_in_bios": "ENABLED - DISABLE IT",
+                   "customer_release": "ACTIVE"}.get(act, ar)
+        self.c_abs.configure(text=ar_text, fg=colors.get(ar, WARN))
         enr_text = {"CLEAN": "CLEAN", "BLOCKED": "ACTIVE ENROLMENT",
                     "UNKNOWN": "NOT CHECKED"}.get(er, "PAST ENROLMENT")
         self.c_enr.configure(text=enr_text, fg=colors.get(er, WARN))
@@ -3801,10 +3860,27 @@ class App:
             list(data.get("absolute_signs") or [])
             + [e.get("description", "") for e in
                (data.get("autopilot_analysis") or {}).get("active", [])])
-        if data.get("absolute_signs"):
-            self.c_abs_note.configure(text="\n".join(data["absolute_signs"][:4]))
+        abs_lines = list(data.get("absolute_signs") or [])[:4]
+        if bstate:
+            abs_lines.insert(0, "BIOS says: Absolute is %s (%s)" % (bstate, bsets))
+        elif ar == "CANNOT CHECK":
+            abs_lines.append("This laptop does not show its Absolute setting "
+                             "to LaptopSeal. Check it in the BIOS (see "
+                             "What to do next).")
+        if abs_lines:
+            self.c_abs_note.configure(text="\n".join(abs_lines))
         self.show_advice(data)
-        if result == "BLOCKED":
+        bios_only = (blocked_kinds(data) == {"absolute"} and
+                     act == "disable_in_bios")
+        if result == "BLOCKED" and bios_only:
+            self.banner("ABSOLUTE IS ENABLED  -  DISABLE IT IN THE BIOS FIRST",
+                        "bad")
+            self.set_stage("check", "bad", "Disable Absolute first")
+            self.c_enr_note.configure(
+                text="Why it is blocked:\n- " + "\n- ".join(reasons[:6] or ["see report"])
+                + "\n\nDisable Absolute in the BIOS (steps under What to do "
+                  "next), then run the check again.")
+        elif result == "BLOCKED":
             self.banner("BLOCKED  -  DO NOT WIPE", "bad")
             self.set_stage("check", "bad", "Blocked - do not wipe")
             self.c_enr_note.configure(

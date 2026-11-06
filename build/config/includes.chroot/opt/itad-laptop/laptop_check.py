@@ -1,7 +1,23 @@
 #!/usr/bin/env python3
 """
-laptop_check.py - ITAD pre-wipe check (v3.1.9)  MULTI-PLATFORM
+laptop_check.py - ITAD pre-wipe check (v3.2.0)  MULTI-PLATFORM
 READ ONLY. Never wipes or writes to any internal drive.
+
+v3.2.0: Smarter Absolute / Computrace check. The check now READS the Absolute
+        setting straight from the BIOS where Linux can see it (firmware
+        attributes: HP hp-bioscfg, Dell dell-wmi-sysman, Lenovo think-lmi)
+        and uses it:
+          - Absolute ENABLED in the BIOS (not yet activated): BLOCKED, the
+            technician is told to disable it in the BIOS first, then run the
+            check again (no request to the customer is needed).
+          - Absolute ACTIVE: BLOCKED, the customer must release it.
+          - Absolute Disabled / Permanently Disabled / Not Active: the BIOS
+            says it is off, so the "word only in the BIOS tables" doubt
+            (v3.1.9) no longer makes Absolute CANNOT CHECK.
+          - Setting not readable on this model: CANNOT CHECK, as before.
+        New JSON fields: absolute_bios, absolute_bios_state, absolute_action.
+        Hard evidence (WPBT, UEFI variable, firmware strings, files on the
+        disk) is still BLOCKED whatever the BIOS setting says.
 
 v3.1.9: False-alarm fix (ThinkPad). The word "computrace" / "absolute" found
         ONLY inside the BIOS main tables (DSDT / SSDT) is no longer a hard
@@ -49,7 +65,11 @@ try:
 except Exception:
     NOW = datetime.now()
 
-VERSION = "3.1.9"
+VERSION = "3.2.0"
+
+# Where Linux shows BIOS settings (read only). A test can point this
+# somewhere else with the ITAD_FWATTR_ROOT environment variable.
+FWATTR_ROOT = os.environ.get("ITAD_FWATTR_ROOT", "/sys/class/firmware-attributes")
 
 BAD_SERIALS = {
     "", "none", "default string", "to be filled by o.e.m.",
@@ -851,6 +871,80 @@ def check_firmware_absolute():
     return signs, warns
 
 
+def read_bios_absolute(root=None):
+    """Absolute / Computrace settings read from the BIOS where Linux can see
+    them (firmware-attributes: hp-bioscfg, dell-wmi-sysman, think-lmi).
+    READ ONLY. Returns [(name, value)]; empty if this model does not show
+    the setting to Linux."""
+    root = root or FWATTR_ROOT
+    out = []
+    for p in sorted(glob.glob(os.path.join(root, "*", "attributes", "*"))):
+        name = os.path.basename(p)
+        shown = name
+        value = ""
+        for f in ("display_name", "current_value"):
+            try:
+                with open(os.path.join(p, f)) as fh:
+                    text = fh.read().strip()
+            except Exception:
+                continue
+            if f == "display_name" and text:
+                shown = text
+            elif f == "current_value":
+                value = text
+        if re.search(r"absolute|computrace", name + " " + shown, re.I):
+            out.append((shown, value))
+    return out
+
+
+def _bios_value_kind(value):
+    v = (value or "").strip().lower()
+    if not v or v == "unknown":
+        return ""
+    if "permanent" in v:
+        return "PERMANENTLY DISABLED"
+    if re.search(r"not active|inactive|deactivat", v):
+        return "NOT ACTIVE"
+    if re.search(r"\bdisabled?\b|\boff\b|\bno\b|^0$|^false$", v):
+        return "DISABLED"
+    if re.search(r"\bactive\b", v):
+        return "ACTIVE"
+    if re.search(r"\benabled?\b|\bon\b|\byes\b|^1$|^true$", v):
+        return "ENABLED"
+    return ""
+
+
+def classify_bios_absolute(settings):
+    """Turn the BIOS settings into one state: 'PERMANENTLY DISABLED',
+    'ACTIVE', 'ENABLED', 'DISABLED', 'NOT ACTIVE' or '' (cannot tell)."""
+    kinds = []
+    for name, value in settings:
+        kind = _bios_value_kind(value)
+        if not kind:
+            continue
+        n = (name or "").lower()
+        # An action setting such as "Permanently Disable Absolute ...":
+        # "Enable" there means "disable it for good".
+        if "permanent" in n and "disable" in n:
+            if kind == "ENABLED":
+                kinds.append("PERMANENTLY DISABLED")
+            continue
+        # A setting named "Disable Absolute ...": the value is reversed.
+        if "disable" in n:
+            if kind == "ENABLED":
+                kind = "DISABLED"
+            elif kind == "DISABLED":
+                kind = "ENABLED"
+        kinds.append(kind)
+    # The strongest statement wins. "Permanently disabled" can never be
+    # turned back on, so it ends all doubt.
+    for state in ("PERMANENTLY DISABLED", "ACTIVE", "ENABLED",
+                  "DISABLED", "NOT ACTIVE"):
+        if state in kinds:
+            return state
+    return ""
+
+
 def check_win_absolute(root):
     return ["Absolute agent file: " + r.replace("/", "\\")
             for r in WIN_ABSOLUTE_FILES if find_ci(root, r)]
@@ -991,8 +1085,14 @@ def device_box(platform, ident, internal):
     box("DEVICE", rows, "cyan")
 
 
-def absolute_box(abs_result, abs_signs, warns):
+def absolute_box(abs_result, abs_signs, warns, bios_settings=(), bios_state=""):
     rows = [tag(abs_result) + paint("   firmware / disk agent check", "dim")]
+    if bios_state:
+        rows.append("")
+        rows += item(paint(ICON["info"], "cyan"),
+                     "BIOS setting: Absolute is %s (%s)" % (
+                         bios_state, "; ".join("%s = %s" % (n, v or "?")
+                                               for n, v in list(bios_settings)[:3])))
     if abs_signs:
         rows.append("")
         for s in abs_signs:
@@ -1215,6 +1315,7 @@ def main():
     autopilot_analysis = {"state": "NONE", "active": [], "past": [],
                           "tenant": [], "mdm": [], "azure_ad": []}
     mac_enrol = []
+    bios_settings, bios_state = [], ""   # v3.2.0: Absolute setting in the BIOS
 
     try:
         st = Step("Checking firmware for Absolute")
@@ -1228,6 +1329,22 @@ def main():
             st.warn("verify in BIOS")
         else:
             st.ok("nothing found")
+
+        # v3.2.0: read the Absolute setting itself from the BIOS
+        st = Step("Reading the Absolute setting in the BIOS")
+        try:
+            bios_settings = read_bios_absolute()
+            bios_state = classify_bios_absolute(bios_settings)
+        except Exception:
+            bios_settings, bios_state = [], ""
+        if bios_state in ("ENABLED", "ACTIVE"):
+            st.fail("Absolute is %s" % bios_state)
+        elif bios_state:
+            st.ok("Absolute is %s" % bios_state)
+        elif bios_settings:
+            st.warn("setting found, value not clear")
+        else:
+            st.warn("this model does not show it to Linux")
 
         for i, p in enumerate(parts):
             dev, fs = p["path"], p["fstype"] or ""
@@ -1330,6 +1447,22 @@ def main():
             info.append("No operating system on the drive (blank or "
                         "already wiped)")
 
+    # v3.2.0: what the BIOS itself says about Absolute
+    bios_on = bios_state in ("ENABLED", "ACTIVE")
+    bios_off = bool(bios_state) and not bios_on
+    bios_txt = "; ".join("%s = %s" % (n, v or "?") for n, v in bios_settings[:3])
+    if bios_off and not abs_signs:
+        # The BIOS says Absolute is off, so the doubt about a word that was
+        # only found in the BIOS tables (v3.1.9) is settled.
+        gone = set(fw_soft) | {w for w in warns if w.startswith("WPBT present")}
+        fw_soft = []
+        warns[:] = [w for w in warns if w not in gone]
+        info.append("Absolute is %s in the BIOS (%s)" % (bios_state, bios_txt))
+    absolute_action = ""
+    if bios_on and not abs_signs:
+        absolute_action = ("disable_in_bios" if bios_state == "ENABLED"
+                           else "customer_release")
+
     cannot = (list(encrypted) + list(unreadable) + list(disk_notes)
               + ["Partition not checked: %s" % p for p in odd_parts]
               + list(fw_soft))
@@ -1346,7 +1479,8 @@ def main():
     if platform not in ("pc", "mac", "chromebook"):
         cannot.append("Platform not recognised - nothing could be inspected")
 
-    blocked = bool(abs_signs) or autopilot_analysis["state"] == "ACTIVE"
+    blocked = (bool(abs_signs) or bool(absolute_action) or
+               autopilot_analysis["state"] == "ACTIVE")
     if blocked:
         result, code = "BLOCKED", 1
     elif cannot:
@@ -1354,8 +1488,11 @@ def main():
     else:
         result, code = "CLEAR", 0
 
-    if abs_signs:
+    if abs_signs or absolute_action:
         abs_result = "BLOCKED"
+    elif bios_off:
+        # The BIOS itself says Absolute is off (disabled / not active).
+        abs_result = "CLEAR"
     elif (os_checked or blank_drive) and not cannot:
         # Firmware (BIOS) showed no Absolute, and the disk was either
         # checked or has no OS on it. Absolute Persistence lives in the
@@ -1376,6 +1513,12 @@ def main():
 
     # What exactly caused BLOCKED (shown on screen and saved in the JSON)
     block_reasons = list(abs_signs)
+    if absolute_action == "disable_in_bios":
+        block_reasons.append("Absolute is ENABLED in the BIOS (%s). Disable "
+                             "it in the BIOS first." % bios_txt)
+    elif absolute_action == "customer_release":
+        block_reasons.append("Absolute is ACTIVE in the BIOS (%s). The "
+                             "customer must release it." % bios_txt)
     if ap_state == "ACTIVE":
         for e in autopilot_analysis["active"]:
             block_reasons.append("%s: %s" % (e["description"], e["path"]))
@@ -1393,6 +1536,9 @@ def main():
         "notes": cannot,
         "drive_blank": blank_drive, "info": info,
         "absolute_result": abs_result, "absolute_signs": abs_signs,
+        "absolute_bios": [[n, v] for n, v in bios_settings],
+        "absolute_bios_state": bios_state,
+        "absolute_action": absolute_action,
         "autopilot_state": ap_state, "autopilot_result": ap_result,
         "autopilot_analysis": autopilot_analysis,
         "mac_enrolment": mac_enrol,
@@ -1414,7 +1560,7 @@ def main():
 
     rule("RESULTS")
     device_box(platform, ident, internal)
-    absolute_box(abs_result, abs_signs, warns)
+    absolute_box(abs_result, abs_signs, warns, bios_settings, bios_state)
     autopilot_box(autopilot_analysis, os_checked, blank_drive)
     cannot_box(encrypted, unreadable, cannot)
     if info:
@@ -1423,7 +1569,10 @@ def main():
 
     if result == "BLOCKED":
         big_banner(["", "%s  %s" % (ICON["bad"], spaced("BLOCKED")),
-                    "DO NOT WIPE.  Escalate.", ""], "red")
+                    ("DO NOT WIPE YET.  Disable Absolute in the BIOS, then "
+                     "run the check again."
+                     if absolute_action == "disable_in_bios" else
+                     "DO NOT WIPE.  Escalate."), ""], "red")
         why_box(block_reasons)
     elif result == "CANNOT CHECK":
         big_banner(["", "%s  %s" % (ICON["warn"], spaced("CANNOT CHECK")),
