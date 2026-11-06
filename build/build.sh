@@ -39,6 +39,11 @@
 #     they are erased with Apple's own tools instead.
 #   * The Mac driver step can never break the build: if it fails, the ISO
 #     is still made and the build log says what was skipped.
+#
+# v4.1 - Mac freeze after "EFI stub" lines:
+#   * On Apple Macs only (GRUB reads the computer maker), the kernel starts
+#     with "nomodeset plymouth.enable=0": no GPU driver or boot-screen
+#     picture at start-up, and boot text is visible. PCs are not changed.
 set -euo pipefail
 cd "$(dirname "$0")"
 CFG="config"; INC="$CFG/includes.chroot"; HOOKS="$CFG/hooks/normal"
@@ -528,10 +533,20 @@ if [ -d "$G" ]; then
       -e 's/^\([[:space:]]*\)initrd\([[:space:]]\)/\1echo "  > Loading drivers and firmware (a few seconds)..."\n\1initrd\2/' \
       "$f"
   done
+  # v4.1: Apple Macs only. Add safe graphics options to the kernel line
+  # (nomodeset = no GPU driver start-up, plymouth.enable=0 = no boot-screen
+  # picture, so boot text is visible if something still goes wrong). The
+  # kernel line gets ${itad_mac_args}, which is EMPTY on every PC.
+  for f in "$G"/*.cfg; do
+    [ -f "$f" ] || continue
+    sed -i '/^[[:space:]]*linux[[:space:]]/ s/$/ ${itad_mac_args}/' "$f"
+  done
   for f in "$G"/*.cfg; do sed -i 's/^\([[:space:]]*\)set timeout=.*/\1set timeout=0/' "$f"; done
   [ -f "$G/config.cfg" ] && printf '\nset default=0\nset timeout=0\nset timeout_style=hidden\n' >> "$G/config.cfg"
   if [ -f "$G/grub.cfg" ]; then
-    { printf 'set default=0\nset timeout=0\nset timeout_style=hidden\n'; cat "$G/grub.cfg"; } > "$G/g.new"
+    { printf 'set default=0\nset timeout=0\nset timeout_style=hidden\n'
+      printf 'set itad_mac_args=""\ninsmod smbios\nsmbios --type 1 --get-string 4 --set itad_vendor\nif [ "$itad_vendor" = "Apple Inc." ]; then\n  set itad_mac_args="nomodeset plymouth.enable=0"\nfi\n'
+      cat "$G/grub.cfg"; } > "$G/g.new"
     mv -f "$G/g.new" "$G/grub.cfg"
   fi
 fi
