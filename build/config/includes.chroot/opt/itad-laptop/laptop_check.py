@@ -65,7 +65,7 @@ try:
 except Exception:
     NOW = datetime.now()
 
-VERSION = "3.2.0"
+VERSION = "3.2.1"
 
 # Where Linux shows BIOS settings (read only). A test can point this
 # somewhere else with the ITAD_FWATTR_ROOT environment variable.
@@ -1470,8 +1470,10 @@ def main():
         cannot.append("ChromeOS — check Settings > About ChromeOS > "
                       "Additional details > Enterprise enrollment")
     if platform == "mac" and not os_checked:
-        cannot.append("Mac — no APFS/HFS volume readable (FileVault on "
-                      "or apfs-fuse missing). Use macOS Recovery or ABM.")
+        cannot.append("Apple Mac: the disk is encrypted or cannot be read "
+                      "here, so Activation Lock / MDM cannot be checked. "
+                      "Boot macOS Recovery (hold Command+R), check Activation "
+                      "Lock and Apple Business Manager, then erase there.")
     if platform == "pc" and not os_checked and not blank_drive:
         cannot.append("No Windows volume could be inspected")
     if not internal:
@@ -1498,6 +1500,12 @@ def main():
         # checked or has no OS on it. Absolute Persistence lives in the
         # BIOS, so this is a real result.
         abs_result = "CLEAR"
+    elif platform == "mac":
+        # An Apple Mac has no Absolute / Computrace BIOS module, so there is
+        # nothing to read here. The Mac's own lock (Activation Lock / MDM) is
+        # the real question and is reported under "cannot check" below.
+        abs_result = "CLEAR"
+        info.append("Apple Mac: no Absolute BIOS module to check")
     else:
         abs_result = "CANNOT CHECK"
 
